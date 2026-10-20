@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.egg-info/
+runtime/
+config.local.json
+cases/
+.env
+.env.*
+!.env.example
+scripts/prepare_knife1_case.py
+scripts/validate_knife1_*.py
+scripts/smoke_cam_mcp.py
+scripts/smoke_native_mcp.py
+scripts/validate_native_connection.py
+*.log

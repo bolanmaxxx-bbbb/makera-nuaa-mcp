@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "scope": "production_cam",
+  "scope_source": "pending",
+  "process": "rotary",
+  "job_kind": "plate_part",
+  "units": "mm",
+  "setup_id": null,
+  "model": {"path": null, "sha256": null},
+  "material": {"family": null, "grade": null, "grade_unknown_confirmed": false},
+  "target": {"x_mm": null, "y_mm": null, "z_mm": null, "engraving_depth_mm": null, "z_tolerance_mm": null},
+  "stock": {
+    "nominal_mm": {"x": null, "y": null, "z": null},
+    "measurement": {"method": null, "setup_id": null, "datum_id": null, "measured_at": null, "confirmed_current_setup": false, "evidence": null, "top_z_mm": null, "bottom_z_mm": null, "interlayer_mm": null, "thickness_mm": null}
+  },
+  "thickness_control": {"strategy": null, "target_mm": null, "operation_ids": [], "after_facing_reference": null},
+  "datum": {"description": null},
+  "retention": {"method": null, "remaining_stock_mm": null, "separation_plan": null},
+  "tools": [],
+  "operations": [],
+  "plan_confirmed": false,
+  "test_limits_mm": {},
+  "deliverables": {"nc": false}
+}

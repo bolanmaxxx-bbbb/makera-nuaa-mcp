@@ -1,0 +1,6 @@
+{
+  "camera_url": null,
+  "buffer_frames": 40,
+  "max_disk_mb": 256,
+  "retain_hours": 72
+}

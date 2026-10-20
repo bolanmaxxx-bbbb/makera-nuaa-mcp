@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "scope": "production_cam",
+  "scope_source": "pending",
+  "process": "rotary",
+  "job_kind": "custom",
+  "workflow": {"mode": "assisted", "template": null, "selection_source": "pending", "rationale": null},
+  "units": "mm",
+  "setup_id": null,
+  "model": {"path": null, "sha256": null},
+  "material": {"family": null, "grade": null, "grade_unknown_confirmed": false},
+  "target": {},
+  "requirements": [],
+  "stock": {
+    "nominal_mm": {"x": null, "y": null, "z": null},
+    "measurement": {}
+  },
+  "datum": {"description": null},
+  "retention": {},
+  "tools": [],
+  "operations": [],
+  "plan_confirmed": false,
+  "test_limits_mm": {},
+  "deliverables": {"nc": false}
+}

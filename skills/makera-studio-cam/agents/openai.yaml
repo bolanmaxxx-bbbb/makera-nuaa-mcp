@@ -1,0 +1,11 @@
+interface:
+  display_name: "Makera 加工任务向导"
+  short_description: "通过 MCP 自由组合加工流程，逐步补齐目标、刀具、定位与验收要求"
+  default_prompt: "使用 $makera-studio-cam 帮我准备 Makera 加工任务，先选择引导、模板或自定义流程，再逐步补齐参数并通过 MCP 操作。"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "makera-studio"
+      description: "Makera Studio 原生 MCP 服务；运行时核对实际能力"
+policy:
+  allow_implicit_invocation: true

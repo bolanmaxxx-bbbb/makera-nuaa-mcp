@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "makera-studio-mcp"
+version = "0.3.1"
+description = "Standalone native Qt bridge from MCP to Makera Studio CAM"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.30,<2", "websockets>=15,<17", "Pillow>=11,<13", "frida>=17,<18"]
+
+[project.scripts]
+makera-studio-mcp = "makera_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+makera_mcp = ["native_agent.js"]
