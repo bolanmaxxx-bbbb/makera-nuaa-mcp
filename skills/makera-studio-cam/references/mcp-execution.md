@@ -8,6 +8,8 @@
 
 最低验证版本0.3.1；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
+0.3.1是完整目录的验证基线，不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整29工具路由保存在assets/mcp-tool-map.json。
+
 ## 已验证能力与边界
 
 | 动作 | 工具/能力 | 验收 |
@@ -19,6 +21,9 @@
 | 创建轮廓/钻孔 | create_2d_contour / create_2d_drilling | 几何UUID、区域尺寸、切深、工序类型匹配 |
 | 生成并提交 | generate_studio_toolpath | verified=true；本修订的实际刀具参数、非空运动路径及保存文件核对 |
 | 读取工序证据 | get_studio_operations | 比较live与saved，不能互相代替 |
+| 只读MKS检查 | inspect_studio_project(path) | 实际文件哈希、毛坯、SVG UUID/局部顶点范围、工序及计算证据；不能证明已连接设备 |
+| 当前原生状态 | get_studio_state(include_tree=false) | available、项目标题和当前属性；只有诊断需要时才取tree，读失败不伪造状态 |
+| 兼容性/方法诊断 | describe_studio_cam_api | 返回objects中的原生方法签名；发现方法不代表允许直接执行未适配的槽 |
 | 原生面铣定厚 | 尚未验证 | 不跳过；不能用一条外轮廓冒充 |
 | 仿真验收/NC后处理/运动 | 尚未实现或未验证 | 不宣告通过，不绕过服务发送指令 |
 

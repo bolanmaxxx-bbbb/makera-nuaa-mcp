@@ -71,6 +71,8 @@ codex mcp add makera-studio --env PYTHONIOENCODING=utf-8 -- $projectPython -m ma
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
+技能已为当前29个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建工序与配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+
 ## 软件验证流程
 
 当前适配器只允许修改仓库 `cases/` 下的隔离 `.mks` 项目副本。自行准备测试项目，保存原文件，不覆盖源模型。

@@ -1,0 +1,51 @@
+# 持久任务与实际工具参数
+
+适用于创建/继续任务、参数修订，以及把技能记录变成MCP调用。这里的helper只输出JSON，不自动调用工具、不批准运动。使用当前服务的真实工具schema核对参数，逐条调用并验收，不把整个输出当成可盲目执行的批处理。
+
+## 任务工具全部接入
+
+1. 已有task_id时直接get_cam_task(task_id)，没有id而用户要继续任务时才list_cam_tasks()；不要无故读取其他任务的内容。
+2. 新任务用mcp_workflow.py task-spec job.json生成specification，传给create_cam_task(specification)。保存返回的id及revision到job.server_task。
+3. get_next_cam_action(task_id)提示持久记录的下一阶段。inputs_checked、ready_for_desktop_execution仅表示该任务记录的基本输入检查，不代替技能工艺检查或已完成加工。
+4. 参数发生变化时，用完整的新specification调用revise_cam_task(task_id, specification)，不是传一个局部patch。随后get_cam_task核对返回revision、下游invalidated及缺项，再更新job记录和受影响证据。
+5. TaskStore当前没有公开的阶段完成写入工具，原生CAM操作也不会自动推进其stages。因此不能反复调用next直到完成，不能把pending抹掉，也不能直接改任务文件伪造完成。另存同修订的原生返回与文件回读证据，交付时如实解释记录和实际结果的差异。
+
+技能job与TaskStore的schema不同：工具kind映射为type；geometry_region映射为region；model.path映射为model_path；毛坯、原点、output_directory等也需映射。原始requirements、workflow、测量、工序顺序等保留在specification.workflow_job，不能转换时丢弃。人工步骤保留在完整job里并列入unresolved_inputs，避免被自动步骤覆盖后误判完整任务。
+
+job.revision和服务task.revision分别记录。服务create总是从1开始，不能假定两者数值天然相同；用source_job_revision和server_task保存对应关系。每次修订、重新绑定或改变模型都核对该关系，不沿用旧结果。
+
+## 当前连接能力核对
+
+保存本次get_capabilities结果和MCP工具列表（tools/list）为capabilities.json和tools.json。若当前宿主不能导出tools/list，可依据实际暴露工具列表形成名称数组；独立客户端的列表只证明那个新进程，不能冒充当前挂载进程已更新。
+
+```text
+python <skill>/scripts/mcp_workflow.py audit --capabilities capabilities.json --tools tools.json
+```
+
+assets/mcp-tool-map.json覆盖已验证版本的29个工具，按任务路由到对应参考资料。审核会指出新增但尚未接入的工具、未暴露工具，以及工具出现但能力声明不匹配的情况。服务版本只是线索：只调用当前工具列表和能力声明共同支持的动作。旧连接可继续其支持的只读检查；注册刀具、钻孔等缺失功能先重连相应MCP服务，再重新核对。不要用新建独立进程的结果宣称当前聊天已重连。
+
+## 创建与配置工序分开
+
+把当前inspect_studio_project返回值作为binding.project_snapshot，并设置project_path、job_revision和所选geometry_uuids。geometry_uuids必须来自该快照的svg_geometry；快照sha256必须仍匹配文件。技术绑定由Codex读取生成，不要求用户填写。
+
+首次创建不设operation_index：
+
+```text
+python <skill>/scripts/mcp_workflow.py operation-calls job.json <工序id> --binding binding.json --capabilities capabilities.json --tools tools.json
+```
+
+helper只给出创建和回读调用。检查created_and_saved后，记录返回的真实operation_index和operation.id（binding.native_operation_id），再刷新快照；不要把计划中第几道工序当作原生index。发生超时先get_studio_operations/inspect_studio_project确认是否已创建，不能盲目重建。
+
+配置阶段binding增加operation_index及tool：
+
+```json
+{"group":"已存在的任务专用组","name":"本任务刀具名","material_profile":"已核对的材料标签","mode":"register"}
+```
+
+mode可选register或select_existing。register会增改指定组内同名刀具，因此须明确这就是本任务可修改的条目；没有专用组且不能创建时报告缺口，不覆盖不相关刀具。select_existing不修改刀库，但必须检查返回参数与计划一致。
+
+字段映射：diameter_mm→diameter，shank_mm→shank_diameter，flute_length_mm→flute_length；rpm→spindle_speed，feed_mm_min→feedrate，plunge_mm_min→plunge_feedrate，stepdown_mm→step_down，step_over_mm→step_over_mm。原生注册接口要求全部五项速率/策略数值，即使钻孔也不能省略或伪造横向步距；从实际计划/已确认刀库读取，不确定时说明接口缺项。该字段不证明实际啄钻退屑动作。
+
+当前只验证了平底铣刀和钻头的录入，刃数、钻尖角、刀肩/伸出等不能假称已经写入。create调用的切深受当前开发适配器限制：不大于毛坯厚度和10 mm；不能靠任务的through_cut_allowance绕过这个限制。
+
+配置输出分成calls与after_verification：先执行注册/选刀，逐条检查verified，再把select返回expected_saved_tool_after_generation与本job的参数比较；一致后才能调用generate。生成后验证新运动网格、保存参数、钻孔退屑及源模型哈希。helper拒绝旧revision、过期快照、错误几何/index、缺少步距及当前连接缺失的工具；这仍是记录一致性检查，原生适配器会再次校验实际应用状态。

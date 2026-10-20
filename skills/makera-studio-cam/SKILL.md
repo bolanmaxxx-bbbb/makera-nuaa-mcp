@@ -1,11 +1,20 @@
 ---
 name: makera-studio-cam
-description: 使用 Makera/造物时代 Studio MCP 规划与执行铣削、雕刻、钻孔等CAM任务（含用户写作 MAKRE 的情况），支持引导推荐、可修改模板和自定义流程，分阶段补齐目标、材料、刀具、定位、工序及验收要求。适用于工艺讨论、软件测试和已授权的软件操作；现场运动需另有支持和授权。
+description: 使用 Makera/造物时代 Studio MCP 规划与执行CAM任务（含用户写作 MAKRE 的情况），支持引导、模板和自定义流程，逐步补齐目标、刀具、定位与验收。也用于Studio项目检查、任务续接/修订、辅助视频取样/证据导出和现有NC文本检查。适用于讨论、测试及已授权的软件操作；现场运动需另有支持和授权。
 ---
 
 # Makera 加工任务向导
 
 使用 `makera-studio` MCP 执行已验证的软件动作；本技能负责参数采集、工艺计划和阶段验收。保持中文沟通，沿用用户已经确认的信息。先满足完整任务的工艺要求，视频只作为辅助证据。
+
+## 工具入口与能力核对
+
+先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的29个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
+
+- 项目、毛坯、几何、刀具、轮廓/钻孔、计算保存、原生状态/方法诊断：读[MCP执行与验收](references/mcp-execution.md)。
+- 创建/继续/修订持久任务、job字段映射和实际调用参数：读[任务与调用参数](references/task-and-payloads.md)。新任务使用create_cam_task，继续时get/list，参数改变用完整spec调用revise；不凭摄像头或计划自动推进阶段。
+- 用户需要观察或记录现场时：读[视频与NC辅助流程](references/observation-and-nc.md)，接通状态、订阅、单帧/连续采样、状态组合、上下文、事件和本地ZIP导出；无需视频时不要求地址或开启相机。
+- 用户提供NC文件：同一参考中的inspect_nc_file用于文本检查，不等于生成NC、仿真或发送加工。
 
 ## 1. 判断当前请求
 
@@ -54,6 +63,8 @@ python <本技能目录>/scripts/check_job.py <job.json> --stage cam --capabilit
 ## 6. 按当前 MCP 能力逐步执行
 
 操作前读 [MCP执行与验收](references/mcp-execution.md)，调用实际挂载服务的 `get_capabilities` 并核对版本/工具存在。代码目录更新不代表当前进程已更新。
+
+根据task-and-payloads.md使用mcp_workflow.py生成阶段参数；helper不执行调用。创建后使用真实返回index并刷新文件快照；配置后先比较选刀返回参数与计划，再执行生成和保存回读。逐条检查返回值，不能把阶段JSON当作无需检查的批处理。技能job.revision与服务task.revision分别保存映射。
 
 - 使用隔离项目副本，记录原模型哈希。当前适配器仅接受服务项目 `cases/` 下的 `.mks`。
 - 针对每一工序：核对目标几何 → 配置 → 选刀 → 原生生成 → 保存 → 文件回读。选刀只更新编辑器，新参数在生成时提交。

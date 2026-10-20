@@ -8,6 +8,9 @@
   "units": "mm",
   "setup_id": null,
   "model": {"path": null, "sha256": null},
+  "native_project": null,
+  "output_directory": null,
+  "server_task": {"id": null, "revision": null},
   "material": {"family": null, "grade": null, "grade_unknown_confirmed": false},
   "target": {"x_mm": null, "y_mm": null, "z_mm": null, "engraving_depth_mm": null, "z_tolerance_mm": null},
   "stock": {
