@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent, ToolAnnotations
 
 from .camera import Camera, Frame, utc_now
+from . import __version__
 from .config import Settings
 from .evidence import EvidenceStore
 from .nc import inspect_nc
@@ -72,7 +73,7 @@ def build_server(settings: Settings | None = None):
     @server.tool(annotations=readonly)
     def get_capabilities() -> dict:
         """List implemented capabilities and explicit unimplemented machine/CAM operations."""
-        return {"version": "0.3.1", "primary_objective": "complete_studio_cam_tasks", "backend": "native_qt_via_frida",
+        return {"version": __version__, "primary_objective": "complete_studio_cam_tasks", "backend": "native_qt_via_frida",
                 "requires_computer_use": False, "camera_configured": bool(settings.camera_url),
                 "camera_protocol": "WebSocket /ws_video + start_stream -> binary JPEG (verified locally)",
                 "supported": ["native_studio_connection", "native_project_open", "native_stock_dimensions_and_commit",
@@ -81,6 +82,7 @@ def build_server(settings: Settings | None = None):
                               "native_2d_contour_calculation_and_saved_vertex_verification",
                               "native_tool_geometry_and_material_parameter_registration", "native_editor_tool_selection_and_generation_commit",
                               "native_2d_drilling_and_verified_peck_retraction_sequence",
+                              "native_pocket_calculation_and_verification", "native_planar_start_end_depth_commit",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
@@ -128,8 +130,18 @@ def build_server(settings: Settings | None = None):
         return await anyio.to_thread.run_sync(studio.create_drilling, geometry_uuids, end_depth_mm)
 
     @server.tool(annotations=local_write)
+    async def create_2d_pocket(geometry_uuids: list[str], end_depth_mm: float) -> dict:
+        """Create Studio's native 2D area-clearing operation (type 0), save and verify geometry/depth. Uses the default flat tool until explicitly selected. Not a verified facing-to-thickness workflow; no machine commands."""
+        return await anyio.to_thread.run_sync(studio.create_pocket, geometry_uuids, end_depth_mm)
+
+    @server.tool(annotations=local_write)
+    async def set_studio_operation_depths(operation_index: int, start_depth_mm: float, end_depth_mm: float) -> dict:
+        """Set and commit 0 <= start < end <= min(stock height, 10 mm) for native pocket/contour/drilling. Save and read back; requires recalculation. No origin change or machine motion."""
+        return await anyio.to_thread.run_sync(studio.set_operation_depths, operation_index, start_depth_mm, end_depth_mm)
+
+    @server.tool(annotations=local_write)
     async def generate_studio_toolpath(operation_index: int) -> dict:
-        """Run Studio's native 2D contour calculation and save. Verify new linked nonempty native vertex buffers; no machine commands. Does not certify simulation or machining safety."""
+        """Run native planar pocket/contour/drilling calculation and save. Verify new linked nonempty native vertex buffers and pending tool parameters; no machine commands. Does not certify simulation or machining safety."""
         return await anyio.to_thread.run_sync(studio.generate_toolpath, operation_index)
 
     @server.tool(annotations=local_write)

@@ -22,7 +22,7 @@ job.revision和服务task.revision分别记录。服务create总是从1开始，
 python <skill>/scripts/mcp_workflow.py audit --capabilities capabilities.json --tools tools.json
 ```
 
-assets/mcp-tool-map.json覆盖已验证版本的29个工具，按任务路由到对应参考资料。审核会指出新增但尚未接入的工具、未暴露工具，以及工具出现但能力声明不匹配的情况。服务版本只是线索：只调用当前工具列表和能力声明共同支持的动作。旧连接可继续其支持的只读检查；注册刀具、钻孔等缺失功能先重连相应MCP服务，再重新核对。不要用新建独立进程的结果宣称当前聊天已重连。
+assets/mcp-tool-map.json覆盖已验证版本的31个工具，按任务路由到对应参考资料。审核会指出新增但尚未接入的工具、未暴露工具，以及工具出现但能力声明不匹配的情况。服务版本只是线索：只调用当前工具列表和能力声明共同支持的动作。旧连接可继续其支持的只读检查；注册刀具、钻孔、区域清理等缺失功能先重连相应MCP服务，再重新核对。不要用新建独立进程的结果宣称当前聊天已重连。
 
 ## 创建与配置工序分开
 
@@ -35,6 +35,8 @@ python <skill>/scripts/mcp_workflow.py operation-calls job.json <工序id> --bin
 ```
 
 helper只给出创建和回读调用。检查created_and_saved后，记录返回的真实operation_index和operation.id（binding.native_operation_id），再刷新快照；不要把计划中第几道工序当作原生index。发生超时先get_studio_operations/inspect_studio_project确认是否已创建，不能盲目重建。
+
+kind=pocket映射为create_2d_pocket，代表平面区域清理，不是三维型腔或完整面铣。创建时起始深度明确为0；job工序可提供start_depth_mm（默认0），depth_mm表示相对同一参考面的结束深度。若已保存区间与计划不同，helper先输出depth_only阶段调用set_studio_operation_depths并回读，刷新快照后再继续选刀配置；不得把深度调整和生成混成不检查的批处理。改深度后旧计算结果作废。改变这个值不会重新测量厚度，也不会改变机床原点。
 
 配置阶段binding增加operation_index及tool：
 

@@ -21,6 +21,9 @@ try:
                 result = studio._call(method, *request.get('args', []))
             if request.get('save'):
                 Path(request['save']).write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+            if request.get('summary'):
+                result = {'saved': request.get('save'), 'keys': list(result) if isinstance(result,dict) else None,
+                          'count': len(result) if isinstance(result,(list,dict)) else None}
             if request.get('brief') and isinstance(result,dict) and 'items' in result:
                 result = {'modal':result['modal'],'root':result['root'],'items':[
                     {**{k:v for k,v in o.items() if k!='methods'},'methods':[m['signature'] for m in o['methods']] if not o['type'].startswith('Q') else []}

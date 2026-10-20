@@ -32,7 +32,7 @@ WORKFLOW = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WORKFLOW)
 CATALOG = json.loads((SKILL / "assets/mcp-tool-map.json").read_text(encoding="utf-8"))
 NAMES = [item["name"] for item in CATALOG["tools"]]
-CAPS = {"version": "0.3.1", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]})}
+CAPS = {"version": "0.4.0", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]})}
 GEOMETRY = "12345678-1234-1234-1234-123456789abc"
 
 
@@ -41,7 +41,7 @@ def write_project(path, created=False, kind=1):
     binary = (struct.pack("<I", 8) + b"scene_v3" + struct.pack("<I", 8) + b"SvgShape"
               + struct.pack("<I", 36) + GEOMETRY.encode() + b"\0" * 98 + struct.pack("<I", len(data)) + data)
     operations = [{"id": "synthetic-native", "type": kind, "selectedmeshes": [GEOMETRY],
-                   "depth": {"endDepth": 0.5}}] if created else []
+                   "depth": {"startDepth": 0, "endDepth": 0.5}}] if created else []
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("makera.bin", binary)
         archive.writestr("makera.prj", json.dumps({"project": {"strProjectName": "synthetic",
@@ -115,6 +115,16 @@ class WorkflowPayloadTests(unittest.TestCase):
         self.job["tools"][0]["kind"] = "drill"
         self.assertEqual(self.calls()["calls"][0]["tool"], "create_2d_drilling")
 
+    def test_pocket_creation_and_explicit_depth_changes_are_separate_phases(self):
+        self.job["operations"][0]["kind"] = "pocket"
+        self.assertEqual(self.calls()["calls"][0]["tool"], "create_2d_pocket")
+        self.configured(kind=0)
+        self.job["operations"][0]["start_depth_mm"] = 0.1
+        packets = self.calls()
+        self.assertEqual(packets["phase"], "depth_only")
+        self.assertEqual(packets["calls"][0]["arguments"]["start_depth_mm"], 0.1)
+        self.assertNotIn("after_verification", packets)
+
     def test_existing_tool_selection_does_not_update_library(self):
         self.configured()
         self.binding["tool"]["mode"] = "select_existing"
@@ -172,7 +182,7 @@ class WorkflowPayloadTests(unittest.TestCase):
                         audited = WORKFLOW.audit(capabilities, [tool.model_dump() for tool in tools])
                         self.assertTrue(audited["full_catalog_available"])
                         self.assertTrue(audited["all_exposed_tools_routed"])
-                        self.assertEqual(audited["covered_count"], 29)
+                        self.assertEqual(audited["covered_count"], 31)
                         for call in packets["calls"] + packets["after_verification"]:
                             jsonschema.validate(call["arguments"], schemas[call["tool"]])
                 anyio.run(verify)

@@ -212,7 +212,7 @@ class NativeStudio:
             info = next(t for t in tables if t['name']=='tableWidget_tool_infomation')
             values = {re.split(r'[（(]',header)[0].strip():row[0] for header,row in zip(info['row_labels'],info['values']) if header}
             saved_operation = inspect_project(str(self.managed_project))['operations'][operation_index]
-            if values.get('类型') != {1:'平底刀',2:'钻头'}.get(saved_operation['type']):
+            if values.get('类型') != {0:'平底刀',1:'平底刀',2:'钻头'}.get(saved_operation['type']):
                 raise ValueError('Selected tool type does not match the operation')
             rate_rows = next(t for t in tables if t['name']=='tableWidget_material')['values']
             rate = next(row for row in rate_rows if row[0]==material)
@@ -234,10 +234,16 @@ class NativeStudio:
     def create_drilling(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
         return self._create_2d(geometry_uuids, end_depth_mm, 'drilling')
 
+    def create_pocket(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
+        return self._create_2d(geometry_uuids, end_depth_mm, 'pocket')
+
     def _create_2d(self, geometry_uuids: list[str], end_depth_mm: float, kind: str) -> dict:
         """Create a native planar operation, verify geometry and depth persistence."""
         with self.lock:
             self._require_managed()
+            types = {'pocket': (0, '2D区域清理'), 'contour': (1, '2D轮廓'), 'drilling': (2, '2D钻孔')}
+            if kind not in types:
+                raise ValueError('Unsupported planar operation kind')
             if not isinstance(geometry_uuids, list) or not geometry_uuids or len(set(geometry_uuids)) != len(geometry_uuids):
                 raise ValueError('Expected distinct SVG geometry UUIDs')
             if isinstance(end_depth_mm, bool) or not isinstance(end_depth_mm, (int, float)) or not math.isfinite(end_depth_mm) or end_depth_mm <= 0:
@@ -261,7 +267,7 @@ class NativeStudio:
                 if time.monotonic() > deadline:
                     raise RuntimeError('Path chooser was queued but did not appear')
                 time.sleep(.1)
-            if not self._call('choose_path_type', {'contour':'2D轮廓','drilling':'2D钻孔'}[kind])['queued']:
+            if not self._call('choose_path_type', types[kind][1])['queued']:
                 raise RuntimeError('Studio rejected contour creation')
             while True:
                 live = self._call('path_summary')
@@ -273,13 +279,49 @@ class NativeStudio:
             result = self._call('configure_contour', baseline_count, geometry_uuids, end_depth_mm, kind)
             if not all(result['invoked']):
                 raise RuntimeError('Contour configuration invocation failed; inspect current project')
+            interval = self._call('set_operation_depths', baseline_count, 0.0, end_depth_mm)
+            if not all(interval['invoked']):
+                raise RuntimeError('Initial depth interval was not committed; inspect created operation')
             saved = self.save_project()
             operation = saved['project']['operations'][baseline_count] if saved['saved'] else {}
-            verified = (operation.get('type') == {'contour':1,'drilling':2}[kind] and operation.get('geometry_uuids') == geometry_uuids
+            verified = (operation.get('type') == types[kind][0] and operation.get('geometry_uuids') == geometry_uuids
+                        and abs(operation.get('depth', {}).get('startDepth', -1)) < 1e-6
                         and abs(operation.get('depth', {}).get('endDepth', -1) - end_depth_mm) < 1e-6)
             return {'created_and_saved': verified, 'operation_index': baseline_count, 'operation': operation,
                     'tool_selection': 'current Studio default tool; inspect returned tool parameters before use',
                     'calculated': False, 'machining_ready': False}
+
+    def set_operation_depths(self, operation_index: int, start_depth_mm: float, end_depth_mm: float) -> dict:
+        """Commit an explicit planar depth interval; require fresh calculation afterward."""
+        with self.lock:
+            self._require_managed()
+            if isinstance(operation_index, bool) or not isinstance(operation_index, int) or operation_index < 0:
+                raise ValueError('Expected a nonnegative operation index')
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                   for v in (start_depth_mm, end_depth_mm)) or not 0 <= start_depth_mm < end_depth_mm <= 10:
+                raise ValueError('Expected 0 <= start depth < end depth <= 10 mm')
+            baseline = inspect_project(str(self.managed_project))
+            if operation_index >= len(baseline['operations']) or baseline['operations'][operation_index]['type'] not in (0, 1, 2):
+                raise ValueError('Expected an existing planar pocket/contour/drilling operation')
+            if end_depth_mm > baseline['stock']['height']:
+                raise ValueError('Depth exceeds stock height')
+            live = self._call('path_summary')
+            if live['modal_type']:
+                raise RuntimeError('Resolve the active Studio dialog before editing depth')
+            if len(live['paths']) != len(baseline['operations']):
+                raise RuntimeError('Live and saved operation order/count must be synchronized before depth editing')
+            result = self._call('set_operation_depths', operation_index, start_depth_mm, end_depth_mm)
+            if not all(result['invoked']):
+                raise RuntimeError('Depth editing failed; inspect current operation before retrying')
+            saved = self.save_project()
+            operation = saved['project']['operations'][operation_index] if saved['saved'] else {}
+            depth = operation.get('depth') or {}
+            verified = (operation.get('id') == baseline['operations'][operation_index].get('id')
+                        and abs(depth.get('startDepth', -1) - start_depth_mm) < 1e-6
+                        and abs(depth.get('endDepth', -1) - end_depth_mm) < 1e-6)
+            return {'verified': verified, 'operation_index': operation_index, 'operation': operation,
+                    'recalculation_required': True, 'simulation_verified': False,
+                    'machine_commands_sent': False, 'machining_ready': False}
 
     def generate_toolpath(self, operation_index: int) -> dict:
         with self.lock:
@@ -290,8 +332,8 @@ class NativeStudio:
             if operation_index >= len(baseline_project['operations']):
                 raise ValueError('Saved operation index does not exist')
             operation = baseline_project['operations'][operation_index]
-            if operation['type'] not in (1,2) or not operation['geometry_uuids']:
-                raise ValueError('Only configured 2D contour/drilling operations with selected geometry are supported')
+            if operation['type'] not in (0,1,2) or not operation['geometry_uuids']:
+                raise ValueError('Only configured planar pocket/contour/drilling operations with selected geometry are supported')
             live = self._call('path_summary')
             if live['modal_type']:
                 raise RuntimeError('Resolve current Studio dialog before calculation')

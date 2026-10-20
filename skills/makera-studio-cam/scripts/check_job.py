@@ -281,6 +281,9 @@ def validate_job(job, stage="plan", capabilities=None, evidence=None):
             if op_kind != "drill" and tool.get("kind") not in {"endmill", "engraver"}:
                 issue("tool_kind", prefix, "铣削/雕刻工序需要对应的刀具类型", "tools")
             depth, reach = op.get("depth_mm"), tool.get("flute_length_mm")
+            start_depth = op.get("start_depth_mm", 0)
+            if not number(start_depth) or (number(depth, positive=True) and start_depth >= depth):
+                issue("depth_interval", prefix + ".start_depth_mm", "起始深度须为有限非负值，且小于结束深度", "process")
             if number(depth, positive=True) and number(reach, positive=True) and depth >= reach:
                 issue("tool_reach", prefix, "切深达到/超过刃长；还需核对实际伸出、肩部和夹持间隙", "tools")
             if number(depth, positive=True) and number(op.get("stepdown_mm"), positive=True) and op["stepdown_mm"] > depth:

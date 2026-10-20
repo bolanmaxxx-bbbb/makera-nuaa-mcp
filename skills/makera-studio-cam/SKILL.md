@@ -9,9 +9,9 @@ description: 使用 Makera/造物时代 Studio MCP 规划与执行CAM任务（�
 
 ## 工具入口与能力核对
 
-先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的29个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
+先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的31个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
 
-- 项目、毛坯、几何、刀具、轮廓/钻孔、计算保存、原生状态/方法诊断：读[MCP执行与验收](references/mcp-execution.md)。
+- 项目、毛坯、几何、刀具、区域清理/轮廓/钻孔、起止深度、计算保存、原生状态/方法诊断：读[MCP执行与验收](references/mcp-execution.md)。
 - 创建/继续/修订持久任务、job字段映射和实际调用参数：读[任务与调用参数](references/task-and-payloads.md)。新任务使用create_cam_task，继续时get/list，参数改变用完整spec调用revise；不凭摄像头或计划自动推进阶段。
 - 用户需要观察或记录现场时：读[视频与NC辅助流程](references/observation-and-nc.md)，接通状态、订阅、单帧/连续采样、状态组合、上下文、事件和本地ZIP导出；无需视频时不要求地址或开启相机。
 - 用户提供NC文件：同一参考中的inspect_nc_file用于文本检查，不等于生成NC、仿真或发送加工。

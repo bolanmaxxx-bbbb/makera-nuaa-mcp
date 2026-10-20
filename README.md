@@ -2,7 +2,7 @@
 
 让 Codex 通过 MCP 直接调用 Makera Studio，逐步规划、生成并核对 CAM 结果。附带可复用的 `makera-studio-cam` 技能，支持引导推荐、可修改模板和自定义工艺流程。摄像头采样是辅助观测能力。
 
-当前版本 **0.3.1**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
+当前版本 **0.4.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
 
 ```text
 Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
@@ -17,10 +17,12 @@ Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
 | 打开隔离 MKS、设置毛坯尺寸、保存回读 | 已验证 |
 | 注册刀具尺寸/材料参数、编辑器选刀 | 已验证；选刀参数在生成刀路时提交 |
 | 创建 2D 轮廓和钻孔工序 | 已验证 |
+| 创建 2D 区域清理/平面型腔 | 已验证；原生工序类型0，使用选定SVG区域 |
+| 修改平面工序起止深度 | 已验证；保存回读，修改后重新计算 |
 | 原生计算、实际参数及运动顶点回读 | 已验证；钻孔另检查逐次退屑序列 |
 | 任务记录、输入检查和修订管理 | 已实现 |
 | 摄像头状态、JPEG 采样及本地证据导出 | 辅助功能，需配置已验证的本地视频地址 |
-| 面铣、型腔、曲面等其余工序 | 尚未完成适配 |
+| 完整面铣定厚、三维型腔/曲面等其余流程 | 尚未完成适配；区域清理不能直接视为完整定厚链 |
 | 仿真结果验证、NC 后处理交付 | 尚未实现 |
 | 机床探测、移动和切削控制 | 不提供 |
 
@@ -71,7 +73,7 @@ codex mcp add makera-studio --env PYTHONIOENCODING=utf-8 -- $projectPython -m ma
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
-技能已为当前29个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建工序与配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+技能已为当前31个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
 
 ## 软件验证流程
 
@@ -80,6 +82,10 @@ codex mcp add makera-studio --env PYTHONIOENCODING=utf-8 -- $projectPython -m ma
 典型顺序：`get_capabilities` → `connect_studio` → `open_studio_project` → `get_studio_operations` → 创建工序 → 注册/选择刀具 → `generate_studio_toolpath` → 保存回读。
 
 “已排队”“选刀成功”或单个状态标志不代表刀路已完成；必须检查实际保存参数和新生成的运动路径。钻孔的辅助孔形网格不等于运动轨迹。刀路显示数据也不等同于仿真或 NC 后处理结果。
+
+v0.4新增`create_2d_pocket(geometry_uuids, end_depth_mm)`及`set_studio_operation_depths(operation_index, start_depth_mm, end_depth_mm)`。创建时起始深度明确提交为0；深度编辑要求`0 <= start < end <= min(毛坯厚度, 10 mm)`，适用于平面区域清理、轮廓和钻孔，不能修改工件原点或机床坐标。`start_depth_mm`与结束深度均相对于该工序参考面，改变后必须重新生成并验证新运动网格。
+
+本版Studio的原生入口是“2D区域清理”，没有将其重新命名为已验证面铣。若用于局部表面去除，仍须确认加工区域与刀具通道的覆盖、参考面、实测厚度及目标尺寸；创建一个区域清理工序不证明定厚已经完成。
 
 公开仓库不包含现场案例、测量记录、加工项目、设备地址、摄像头采样或运行日志。`cases/`、`runtime/`、本地配置及案例专用脚本均被忽略。
 
@@ -93,5 +99,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 ```
 
 原生联调脚本位于 `scripts/`，可能切换或修改隔离的 Studio 项目。先阅读脚本和当前应用状态，只在明确的软件验证范围运行。项目的验证结论与限制见 [VALIDATION.md](VALIDATION.md)。
+
+`scripts/validate_planar_mcp.py`接受使用者自己的几何MKS和SVG UUID，创建全新副本验证区域清理及深度增减。输入项目须仅含几何，当前Studio须已保存且没有提示窗；脚本拒绝覆盖已有测试文件。输出报告保留在被Git忽略的runtime目录。
 
 接口参考：[Qt QMetaObject](https://doc.qt.io/archives/qt-5.15/qmetaobject.html)、[Frida JavaScript API](https://frida.re/docs/javascript-api/)。

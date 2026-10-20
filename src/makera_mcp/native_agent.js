@@ -318,6 +318,7 @@ rpc.exports = {
       })};
   });},
   configureContour(hwnd,index,uuids,endDepth,kind){return onGui(hwnd,()=>{
+    if(!['contour','drilling','pocket'].includes(kind))throw new Error('Unsupported planar operation kind');
     if(!Number.isInteger(index)||index<0||!Array.isArray(uuids)||!uuids.length||uuids.length>50||uuids.some(s=>typeof s!=='string'||!/^[A-Za-z0-9-]{36}$/.test(s)))throw new Error('Invalid path or geometry identifiers');
     if(!Number.isFinite(endDepth)||endDepth<=0||endDepth>10)throw new Error('Invalid test contour depth');
     const root=rootOf(hwnd),paths=treeOf(root).filter(o=>o.type==='KnifePathDragWdg');
@@ -326,11 +327,36 @@ rpc.exports = {
     const choice=objects.filter(o=>o.type==='ChooseObjBtnWgt');
     const depth=objects.filter(o=>o.name==='doubleSpinBox'&&o.path.includes('/dspbEndDepth/'));
     if(choice.length!==1||depth.length!==1)throw new Error('Unexpected contour editor');
-    if(kind!=='drilling'&&!objects.some(o=>o.name==='contour2DPosition'&&visible(ptr(o.pointer))))throw new Error('Expected visible 2D contour operation');
+    if(kind==='contour'&&!objects.some(o=>o.name==='contour2DPosition'&&visible(ptr(o.pointer))))throw new Error('Expected visible 2D contour operation');
     const results=[queueMethod(ptr(choice[0].pointer),'sltChooseDlgFinished',[{type:'std::vector<std::string>',value:uuids},{type:'int',value:uuids.length}],1),
       queueMethod(ptr(depth[0].pointer),'setValue',[{type:'double',value:endDepth}],1),
       queueMethod(path,'on_dspbEndDepth_editingFinished',[],1)];
     return {invoked:results,geometry_uuids:uuids,end_depth_mm:endDepth};
+  });},
+  setOperationDepths(hwnd,index,startDepth,endDepth){return onGui(hwnd,()=>{
+    if(!Number.isInteger(index)||index<0||!Number.isFinite(startDepth)||!Number.isFinite(endDepth)||startDepth<0||endDepth<=startDepth||endDepth>10)throw new Error('Invalid planar depth interval');
+    const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
+    if(index>=paths.length||!activeModal().isNull())throw new Error('Operation unavailable or dialog active');
+    const path=ptr(paths[index].pointer),objects=treeOf(path),targets={};
+    for(const field of ['Start','End']){
+      const matches=objects.filter(o=>o.name==='doubleSpinBox'&&o.path.includes('/dspb'+field+'Depth/'));
+      if(matches.length!==1||!isA(ptr(matches[0].pointer),'QDoubleSpinBox'))throw new Error('Expected one planar depth field');
+      const object=ptr(matches[0].pointer),value=field==='Start'?startDepth:endDepth;
+      if(value<spinMin(object)||value>spinMax(object)||(field==='Start'&&spinMin(object)>0))throw new Error('Depth outside native field range');
+      targets[field]=object;
+    }
+    const results=[];
+    // Reset start before changing end, then apply the requested interval. This
+    // avoids transient start>end constraints when editing an existing interval.
+    results.push(queueMethod(targets.Start,'setValue',[{type:'double',value:0}],1));
+    results.push(queueMethod(path,'on_dspbStartDepth_editingFinished',[],1));
+    results.push(queueMethod(targets.End,'setValue',[{type:'double',value:endDepth}],1));
+    results.push(queueMethod(path,'on_dspbEndDepth_editingFinished',[],1));
+    if(startDepth!==0){
+      results.push(queueMethod(targets.Start,'setValue',[{type:'double',value:startDepth}],1));
+      results.push(queueMethod(path,'on_dspbStartDepth_editingFinished',[],1));
+    }
+    return {invoked:results,start_depth_mm:spinValue(targets.Start),end_depth_mm:spinValue(targets.End)};
   });},
   generatePath(hwnd,index){return onGui(hwnd,()=>{
     const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');

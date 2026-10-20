@@ -3,5 +3,5 @@
   "validated_date": "2026-10-20",
   "architecture": "x64",
   "qt": "5",
-  "scope": "native project open, stock set, save; no license/auth modifications"
+  "scope": "native project/stock/save, planar pocket/contour/drilling, start/end depths, tool geometry and rates; no machine motion or license/auth modifications"
 }

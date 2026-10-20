@@ -90,8 +90,8 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         return {"ready": False, "calls": [], "job_checks": checked}
     catalog = audit(capabilities, tool_list)
     op = next((op for op in job["operations"] if op["id"] == operation_id), None)
-    if not op or op.get("kind") not in {"contour", "drill"} or op.get("execution_mode") == "manual":
-        raise ValueError("Only automatic native contour/drill calls are implemented")
+    if not op or op.get("kind") not in {"contour", "drill", "pocket"} or op.get("execution_mode") == "manual":
+        raise ValueError("Only automatic native pocket/contour/drill calls are implemented")
     if binding.get("job_revision") != job["revision"]:
         raise ValueError("Binding belongs to a different job revision")
     project = Path(binding["project_path"]).resolve(strict=True)
@@ -106,6 +106,9 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     if not geometry or len(set(geometry)) != len(geometry) or any(uid not in known for uid in geometry):
         raise ValueError("Choose distinct geometry UUIDs from the current saved project")
     depth = op["depth_mm"]
+    start = op.get("start_depth_mm", 0)
+    if not isinstance(start, (int, float)) or isinstance(start, bool) or not math.isfinite(start) or not 0 <= start < depth:
+        raise ValueError("Expected a finite 0 <= start_depth_mm < depth_mm")
     height = snapshot.get("stock", {}).get("height")
     if not isinstance(height, (int, float)) or isinstance(height, bool) or not math.isfinite(height) or depth > min(10, height):
         raise ValueError("Depth exceeds the native development adapter's stock/10 mm limit")
@@ -118,7 +121,7 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
 
     index = binding.get("operation_index")
     if index is None:
-        call("create_2d_contour" if op["kind"] == "contour" else "create_2d_drilling",
+        call({"contour": "create_2d_contour", "drill": "create_2d_drilling", "pocket": "create_2d_pocket"}[op["kind"]],
              {"geometry_uuids": geometry, "end_depth_mm": depth})
         call("get_studio_operations", {})
         return {"ready": True, "phase": "create_only", "calls": calls,
@@ -128,10 +131,14 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     saved = next((item for item in snapshot.get("operations", []) if item.get("index") == index), {})
     if binding.get("native_operation_id") is None or binding["native_operation_id"] != saved.get("id"):
         raise ValueError("Bind the actual saved native operation id, not only its current list index")
-    if (saved.get("type") != {"contour": 1, "drill": 2}[op["kind"]]
-            or saved.get("geometry_uuids") != geometry
-            or abs(saved.get("depth", {}).get("endDepth", -1) - depth) > 0.000001):
-        raise ValueError("Saved native operation does not match the planned type/geometry/depth")
+    if saved.get("type") != {"pocket": 0, "contour": 1, "drill": 2}[op["kind"]] or saved.get("geometry_uuids") != geometry:
+        raise ValueError("Saved native operation does not match the planned type/geometry")
+    interval = saved.get("depth") or {}
+    if abs(interval.get("startDepth", -1) - start) > 0.000001 or abs(interval.get("endDepth", -1) - depth) > 0.000001:
+        call("set_studio_operation_depths", {"operation_index": index, "start_depth_mm": start, "end_depth_mm": depth})
+        call("get_studio_operations", {})
+        return {"ready": True, "phase": "depth_only", "calls": calls,
+                "next": "Check committed depth and invalidation; refresh snapshot before configuring/generating"}
     for name in ("generate_studio_toolpath", "save_studio_project", "get_studio_operations"):
         if not catalog["tools"][name]["available"]:
             raise ValueError("Required downstream tool/capability unavailable: " + name)
