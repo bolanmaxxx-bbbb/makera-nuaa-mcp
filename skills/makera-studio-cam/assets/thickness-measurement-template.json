@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "context": {
+    "id": null,
+    "setup_id": null,
+    "datum_id": null,
+    "coordinate_epoch": null,
+    "probe_id": null,
+    "calibration_id": null,
+    "frame": null,
+    "work_offset_revision": null,
+    "units": "mm",
+    "z_positive_up": true,
+    "report_format": null,
+    "report_frame_verified": false,
+    "probe_calibration_current": false,
+    "confirmed_current_setup": false
+  },
+  "approach": {
+    "reference_location_hint": null,
+    "surface": "backing_top",
+    "requested_clearance_mm": null,
+    "verified_route_evidence": null,
+    "execution_mode": null
+  },
+  "points": {"backing_top": {"x": null, "y": null}, "stock_top": {"x": null, "y": null}},
+  "xy_tolerance_mm": null,
+  "minimum_contacts_per_surface": null,
+  "max_repeat_spread_mm": null,
+  "backing_transfer": {"delta_z_mm": null, "basis": null},
+  "interlayer": {"thickness_mm": null, "basis": null},
+  "fitness": {"estimated_error_bound_mm": null, "allowed_error_mm": null, "basis": null},
+  "readings": [],
+  "evidence": null
+}

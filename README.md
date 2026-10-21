@@ -92,6 +92,8 @@ $makera-studio-cam
 
 模板可以增删、重排、拆分工序；测厚/定厚仅为按需选择的模块。工艺菜单是规划选项，不表示对应 MCP 操作都已实现。
 
+新增[加工点局部测厚模块](skills/makera-studio-cam/references/thickness-measurement.md)：选择夹具附近裸露垫板为基准，再测加工点顶面，核对垫板高度传递、垫层、重复性及测量精度。配套`check_thickness_measurement.py`只校核已有回报并输出可交接记录，不发送G-code、不实现自动探测；“表面上方20 mm”等用户要求需先转化为经过现场核对的路线净空。
+
 技能附带只读校验器：
 
 ```powershell

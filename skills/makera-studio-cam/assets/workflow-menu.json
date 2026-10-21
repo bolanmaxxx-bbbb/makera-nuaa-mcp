@@ -5,6 +5,9 @@
     {"id": "template", "label": "选择模板", "behavior": "选择起点，再自由增删、重排工序"},
     {"id": "custom", "label": "自定义流程", "behavior": "沿用使用者给出的顺序，检查目标覆盖与工序依赖"}
   ],
+  "optional_modules": [
+    {"id": "local_thickness_measurement", "label": "加工点局部测厚", "reference": "references/thickness-measurement.md", "record_template": "assets/thickness-measurement-template.json", "execution": "规划、导入已采集回报、只读校核；当前无自动运动接口", "candidate_steps": ["选裸露垫板基准点与加工点", "核对坐标、探头、净空与执行方式", "垫板测高", "加工点测高", "重复性与高度传递校核", "局部厚度交接"]}
+  ],
   "templates": [
     {"id": "surface_marking", "label": "表面文字/图案", "candidate_steps": ["定位", "雕刻", "清理与验收"], "focus": ["字宽与刀尖几何", "雕刻深度", "表面基准与平整度"]},
     {"id": "holes", "label": "孔或孔阵列", "candidate_steps": ["定位", "按需要定位孔", "钻孔或铣孔", "按需要扩孔/铰孔", "去毛刺与验收"], "focus": ["孔径位置公差", "通盲孔", "钻尖与退屑", "背面支撑"]},
