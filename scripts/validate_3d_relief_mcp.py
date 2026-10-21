@@ -47,7 +47,8 @@ def make_solid(folder, kind):
 
 def surface_evidence(project, operation, kind):
     with zipfile.ZipFile(project) as z:scene=z.read('makera.bin')
-    checked,changed,undercuts=0,0,0
+    checked,changed,undercuts,surface_matches=0,0,0,0
+    gradient_bound=1/16 if kind=='slope' else math.hypot(1.2*math.pi/16,1.2*math.pi/12)
     for mesh in operation['toolpath_meshes']:
         marker=struct.pack('<I',14)+b'gcode_polyline'+struct.pack('<I',36)+mesh['uuid'].encode('ascii')
         # The kind string is 14 bytes in the verified layout.
@@ -59,13 +60,16 @@ def surface_evidence(project, operation, kind):
             if 14<x<26 and 16<y<24:
                 checked+=1
                 # Solid base is at stock Z=-6 and local XY center is (20,20).
-                if z < -6+height(kind,x-12,y-14)-0.04:undercuts+=1
+                desired=-6+height(kind,x-12,y-14)
+                if z < desired-0.04:undercuts+=1
+                if desired-0.04 <= z <= desired+gradient_bound+0.06:surface_matches+=1
                 if previous and abs(z-previous[2])>1e-5 and math.hypot(x-previous[0],y-previous[1])>1e-5:
                     changed+=1
                 previous=(x,y,z)
             else:previous=None
     return {'interior_vertices_checked':checked,'interior_xyz_varying_segments':changed,
-            'sampled_vertex_undercuts':undercuts,'scope':'sampled flat-tool tip vertices against analytic surface; not swept-volume simulation'}
+            'sampled_vertex_undercuts':undercuts,'surface_match_fraction':surface_matches/max(1,checked),
+            'scope':'sampled flat-tool tip vertices against analytic surface and radius/gradient height bound; not swept-volume simulation'}
 
 
 async def run(source,output,group,material):
@@ -106,14 +110,16 @@ async def run(source,output,group,material):
                 await call('configure_studio_stock',{'specification':{'shape':'box','dimensions_mm':{'x':40,'y':40,'z':20}}})
                 imported=await call('import_studio_model',{'path':str(stl),'units':'mm'})
                 uid=imported['new_models_3d'][0]['meshes'][0]['uuid']
+                await call('configure_studio_stock',{'specification':{'shape':'box','dimensions_mm':{'x':40,'y':40,'z':6}}})
                 current=inspect_project(str(project))
                 matrix=current['models_3d'][0]['meshes'][0]['matrix_column_major']
                 assert all(abs(matrix[r+4*c]-(r==c))<1e-4 for r in range(3) for c in range(3)), 'Fixture orientation must be verified before applying its analytic surface equation'
-                await call('set_studio_model_placement',{'model_uuid':uid,'center_mm':{'x':20,'y':20,'z':-6+h/2},
+                placed=await call('set_studio_model_placement',{'model_uuid':uid,'center_mm':{'x':20,'y':20,'z':-6+h/2},
                     'project_sha256':current['sha256']})
+                assert placed['verified'], placed
                 current=inspect_project(str(project));matrix=current['models_3d'][0]['meshes'][0]['matrix_column_major']
                 assert all(abs(matrix[r+4*c]-(r==c))<1e-4 for r in range(3) for c in range(3)), matrix
-                await call('configure_studio_stock',{'specification':{'shape':'box','dimensions_mm':{'x':40,'y':40,'z':6}}})
+                assert abs(current['models_3d'][0]['meshes'][0]['bounds_after_node_transform_mm']['z'][0]+6)<1e-4
                 for layered,allowance in ((True,.2),(False,0)):
                     snapshot=inspect_project(str(project))
                     created=await call('create_3d_relief',{'model_uuid':uid,'layered':layered,'allowance_mm':allowance,'project_sha256':snapshot['sha256']})
@@ -135,6 +141,7 @@ async def run(source,output,group,material):
                 evidence=surface_evidence(project,saved['operations'][1],kind)
                 assert evidence['interior_vertices_checked']>100 and evidence['interior_xyz_varying_segments']>100, evidence
                 assert evidence['sampled_vertex_undercuts']==0, evidence
+                assert evidence['surface_match_fraction']>.95, evidence
                 report['cases'].append({'kind':kind,'project':str(project),'rough_and_surface_saved_reopened':True,
                     'rough_vertices':sum(m['vertex_count'] for m in saved['operations'][0]['toolpath_meshes']),
                     'surface_vertices':sum(m['vertex_count'] for m in saved['operations'][1]['toolpath_meshes']),

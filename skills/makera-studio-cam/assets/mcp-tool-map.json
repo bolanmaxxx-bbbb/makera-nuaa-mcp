@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "validated_server_version": "0.8.0",
+  "validated_server_version": "0.8.1",
   "tools": [
     {"name":"get_capabilities","route":"discovery","reference":"references/mcp-execution.md","requires":[]},
     {"name":"connect_studio","route":"project","reference":"references/mcp-execution.md","requires":["native_studio_connection"]},

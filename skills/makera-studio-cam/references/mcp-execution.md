@@ -6,9 +6,9 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.7.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.8.1；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整36工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整39工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 

@@ -179,7 +179,7 @@ class NativeStudio:
             untouched = (after.get('svg_geometry')==current['svg_geometry'] and after.get('stock')==current['stock']
                          and len(after.get('models_3d',[]))==1 and len(updated.get('meshes',[]))==1
                          and placed.get('dimensions_mm')==mesh['dimensions_mm'] and placed.get('vertex_count')==mesh['vertex_count'])
-            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings')
+            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings','relief_settings')
             untouched = untouched and [{k:o.get(k) for k in op_keys} for o in after.get('operations',[])]==[{k:o.get(k) for k in op_keys} for o in current['operations']]
             return {'verified':bool(native.get('invoked') and saved.get('saved') and pose_matches and untouched),
                     'native_result':native,'model':updated,'unrelated_inputs_unchanged':untouched,

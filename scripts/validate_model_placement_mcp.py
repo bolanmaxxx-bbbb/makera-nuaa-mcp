@@ -73,6 +73,15 @@ async def run(source, output):
                     args['world_rotation_deg']=rotation
                 placed=await call('set_studio_model_placement',args)
                 assert placed['verified'] and placed['unrelated_inputs_unchanged']
+            # Changing Z alone must persist; XY/rotation success cannot stand in for it.
+            for z in (-14,-15):
+                snapshot=inspect_project(str(project))
+                placed=await call('set_studio_model_placement',{'model_uuid':uid,
+                    'center_mm':{'x':40,'y':30,'z':z},'project_sha256':snapshot['sha256']})
+                assert placed['verified'] and placed['native_result']['center_anchors_checked']
+                assert (await call('open_studio_project',{'path':str(project)}))['opened']
+                saved_center=inspect_project(str(project))['models_3d'][0]['meshes'][0]['center_after_node_transform_mm']
+                assert abs(saved_center['z']-z)<1e-4, saved_center
             stale=inspect_project(str(project))
             await call('set_studio_model_placement',{'model_uuid':uid,
                 'center_mm':{'x':40,'y':30,'z':-15},'project_sha256':'0'*64},expect_error=True)

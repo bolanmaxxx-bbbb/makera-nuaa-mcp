@@ -218,8 +218,8 @@ function nameOf(object) {
 rpc.exports = {
   placeSingleModel(hwnd,modelId,center,rotation){return onGui(hwnd,()=>{
     if(!activeModal().isNull()||!Number.isInteger(modelId)||modelId<0||![center,rotation].every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite))||rotation.filter(v=>v!==0).length>1)throw new Error('Invalid model placement');
-    const objects=treeOf(rootOf(hwnd)),areas=objects.filter(o=>o.name==='widgetDesign'&&o.type==='CutterPathDesignArea'),dialogs=objects.filter(o=>o.type==='MoveDlg'),actions=objects.filter(o=>o.name==='actionMove'&&o.type==='QAction');
-    if(areas.length!==1||dialogs.length!==1||actions.length!==1)throw new Error('Native model placement editor unavailable');
+    const objects=treeOf(rootOf(hwnd)),areas=objects.filter(o=>o.name==='widgetDesign'&&o.type==='CutterPathDesignArea'),dialogs=objects.filter(o=>o.type==='MoveDlg');
+    if(areas.length!==1||dialogs.length!==1)throw new Error('Native model placement editor unavailable');
     const area=ptr(areas[0].pointer),dialog=ptr(dialogs[0].pointer),fields=treeOf(dialog),targets=[];
     for(const [i,axis] of ['X','Y','Z'].entries()){
       const spins=fields.filter(o=>o.name==='doubleSpinBox'&&o.path.includes('/lineEdt_Move_'+axis+'/'));
@@ -229,18 +229,27 @@ rpc.exports = {
       if(value<spinMin(spin)||value>spinMax(spin)||Math.abs(value*scale-Math.round(value*scale))>1e-6)throw new Error('Model center outside native range/precision');
       targets.push({spin,wrapper:ptr(wrappers[0].pointer)});
     }
-    // trigger() establishes Studio's native transform mode; calling the area slot
-    // directly can change its cached coordinates while leaving the model unchanged.
-    if(!queueMethod(ptr(actions[0].pointer),'trigger',[],1))throw new Error('Cannot enter native move mode');
+    // Enter the visible native model Move tool. A hidden QAction can report a
+    // successful invocation without activating the transform editor.
     if(!queueMethod(area,'sltSelectLayerOrModel',[{type:'QList<int>',value:[modelId]},{type:'bool',value:true}],1))throw new Error('Native model selection failed');
+    const moveButtons=objects.filter(o=>o.name==='MenuBtn_Move'&&isA(ptr(o.pointer),'QToolButton'));
+    if(moveButtons.length!==1||!enabled(ptr(moveButtons[0].pointer)))throw new Error('Native model move tool is unavailable');
+    if(!visible(dialog)&&!queueMethod(ptr(moveButtons[0].pointer),'click',[],1))throw new Error('Cannot enter native move mode');
+    if(!visible(dialog))throw new Error('Native model move editor did not become visible');
     if(rotation.some(v=>v!==0)&&!queueMethod(area,'sltRotateObjWorld',rotation.map(value=>({type:'float',value})),1))throw new Error('Native model rotation rejected');
-    if(!queueMethod(dialog,'on_radioButton_center_clicked',[],1)||!queueMethod(dialog,'on_radioButton_3D_Center_clicked',[],1))throw new Error('Cannot select model center anchor');
+    // Calling a clicked handler alone leaves the actual radio selection unchanged.
+    // Studio reads that selection again when committing Z, so click the buttons.
+    const anchors=['radioButton_center','radioButton_3D_Center'].map(name=>{
+      const found=fields.filter(o=>o.name===name&&isA(ptr(o.pointer),'QRadioButton'));
+      if(found.length!==1)throw new Error('Expected model center anchor');return ptr(found[0].pointer);
+    });
+    for(const anchor of anchors){if(!queueMethod(anchor,'click',[],1)||!buttonChecked(anchor))throw new Error('Model center anchor not selected');}
     const invoked=targets.map((t,i)=>queueMethod(t.spin,'setValue',[{type:'double',value:center[i]}],1));
     for(const t of targets)invoked.push(queueMethod(t.wrapper,'editingFinished',[],1));
     invoked.push(queueMethod(dialog,'sltPosChanged',[],1));
     const readback=targets.map(t=>spinValue(t.spin));
     invoked.push(queueMethod(dialog,'sltCloseWindow',[],1));
-    return {invoked:invoked.every(Boolean),editor_center_mm:readback,rotation_delta_deg:rotation};
+    return {invoked:invoked.every(Boolean),editor_center_mm:readback,rotation_delta_deg:rotation,center_anchors_checked:anchors.every(p=>buttonChecked(p))};
   });},
   cancelManagedFileDialog(hwnd){return onGui(hwnd,()=>{
     const modal=activeModal();if(modal.isNull()||classOf(modal)!=='QFileDialog')throw new Error('Expected file dialog');
