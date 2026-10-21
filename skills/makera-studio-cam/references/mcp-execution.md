@@ -6,9 +6,9 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.6.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.7.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整35工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整36工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 
@@ -17,6 +17,7 @@
 | 打开隔离MKS | open_studio_project | opened=true、无未处理提示、目标项目匹配 |
 | 设置名义毛坯 | set_stock_dimensions | 原生回读及保存文件一致；不冒充实测 |
 | 导入STL/SVG | import_studio_model | 新几何UUID、源哈希及保存后的顶点尺寸；不等于刀路、摆放或机床原点已验收 |
+| 单模型摆放 | set_studio_model_placement | 一个模型/一个网格、方形毛坯、完整中心及新鲜SHA；可选单轴90°倍数相对旋转，保存矩阵/中心和无关输入核对后再重开检查 |
 | 读取材料/规格选项 | get_studio_stock_options | 真实分类与当前分类的子选项，不猜牌号 |
 | 配置形状/材料/完整尺寸 | configure_studio_stock | verified、保存后的stock及失败回滚证据；修改后重算受影响工序 |
 | 注册刀具与参数 | register_studio_tool | 原生尺寸/材料参数表逐字段回读；优先使用已存在的项目专用组；当前未适配新建组，缺组时说明能力缺口，不覆盖其他任务条目 |
@@ -85,4 +86,4 @@
 7. 材料库规格使用`{"material_category":"<真实分类>","material_name":"<真实材料>","stock_specification":"<真实规格>"}`，不能混传自定义形状/尺寸。核对保存的规格名称、形状及实际尺寸，`bUsingMaterialSize`或界面标签不能单独证明尺寸已提交。目录尺寸仍是名义值。
 8. 配置成功必须检查`verified`和`saved_stock`。失败且返回`rolled_back`时再检查`rollback_saved_verified`；回滚不完整时停止依赖它的写入并保留现状。毛坯或模型变化需增加任务修订号，作废受影响的刀路、仿真及NC证据，重新检查深度、覆盖和夹具净空。
 
-材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录；未验证的模型变换、STEP等格式、三维工序不借任意Qt槽补齐。其余开发项见[能力覆盖清单](capability-coverage.md)。
+材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录。v0.7的单模型摆放范围、实际留料及重开核对见[几何摆放与留件验收](geometry-and-retention.md)；其余未验证变换、STEP等格式及三维工序不借任意Qt槽补齐。其余开发项见[能力覆盖清单](capability-coverage.md)。

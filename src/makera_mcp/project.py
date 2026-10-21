@@ -31,6 +31,7 @@ def scene_vertices(scene: bytes, uuid: str, kind: str) -> dict:
         raise ValueError('Nonfinite native vertex buffer')
     z_levels = sorted(set(values[2::3]))
     return {'uuid': uuid, 'kind': kind, 'vertex_count': length // 12,
+            'node_matrix_column_major': list(struct.unpack_from('<16f', scene, end)),
             'z_levels_mm': z_levels if len(z_levels) <= 256 else None,
             'z_vertex_sequence_mm': list(values[2::3]) if len(values)//3 <= 256 else None,
             'bounds_in_serialized_coordinates_mm': {axis: [min(values[i::3]), max(values[i::3])] for i, axis in enumerate('xyz')},
@@ -64,6 +65,23 @@ def model_mesh_vertices(scene: bytes, uuid: str) -> dict:
     result = scene_vertices(scene, uuid, candidates[0])
     bounds = result['bounds_in_serialized_coordinates_mm']
     result['dimensions_mm'] = {axis: bounds[axis][1]-bounds[axis][0] for axis in 'xyz'}
+    name = candidates[0].encode('utf-8')
+    node = struct.pack('<I', len(name)) + name + marker
+    offset = scene.index(node) + len(node)
+    matrix = struct.unpack_from('<16f', scene, offset)
+    if not all(math.isfinite(v) for v in matrix) or any(abs(matrix[i]-v)>1e-5 for i,v in ((3,0),(7,0),(11,0),(15,1))):
+        raise ValueError('Unsupported nonfinite or nonaffine model transform')
+    length = struct.unpack_from('<I', scene, offset+98)[0]
+    lower=[float('inf')]*3;upper=[-float('inf')]*3
+    for point in struct.iter_unpack('<fff',memoryview(scene)[offset+102:offset+102+length]):
+        for row in range(3):
+            value=sum(matrix[row+4*col]*point[col] for col in range(3))+matrix[12+row]
+            lower[row]=min(lower[row],value);upper[row]=max(upper[row],value)
+    result['matrix_column_major'] = list(matrix)
+    result['bounds_after_node_transform_mm'] = {axis:[lower[i],upper[i]] for i,axis in enumerate('xyz')}
+    result['dimensions_after_node_transform_mm'] = {axis:b[1]-b[0] for axis,b in result['bounds_after_node_transform_mm'].items()}
+    result['center_after_node_transform_mm'] = {axis:sum(b)/2 for axis,b in result['bounds_after_node_transform_mm'].items()}
+    result['transform_scope'] = 'saved model node matrix; machine/work offsets and arbitrary parent transforms are not verified'
     return result
 
 

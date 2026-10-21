@@ -3,5 +3,5 @@
   "validated_date": "2026-10-21",
   "architecture": "x64",
   "qt": "5",
-  "scope": "native project/open/save, STL/SVG import with saved geometry, box/cylinder stock with exact materials/catalog presets, planar pocket/contour/drilling, explicit start/end depths and backing allowance, automatic contour tab settings, tool geometry and rates; no machine motion or license/auth modifications"
+  "scope": "native project/open/save, STL/SVG import with saved geometry, bounded single-model center and quarter-turn world rotation with saved matrix verification, box/cylinder stock with exact materials/catalog presets, planar pocket/contour/drilling, explicit start/end depths and backing allowance, automatic contour tab settings, tool geometry and rates; no machine motion or license/auth modifications"
 }

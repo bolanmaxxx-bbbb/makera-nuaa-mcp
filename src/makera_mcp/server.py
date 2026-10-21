@@ -87,10 +87,11 @@ def build_server(settings: Settings | None = None):
                               "native_contour_tabs_editor_and_saved_parameters", "native_explicit_through_cut_allowance",
                               "native_model_import_stl_svg_with_saved_geometry", "native_stock_catalog_readback",
                               "native_stock_shape_material_dimensions_saved",
+                              "native_single_model_placement_saved_matrix_verification",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
-                "not_implemented": ["other_model_import_formats", "model_transform_commit", "native_project_creation_save_as",
+                "not_implemented": ["other_model_import_formats", "multi_model_and_general_transform_commit", "native_project_creation_save_as",
                                     "tool_group_creation", "other_tool_geometry_fields", "operation_reorder_copy_delete",
                                     "full_facing_to_thickness_workflow", "fixture_clearance_verification",
                                     "task_stage_completion_commit", "remaining_operation_types", "simulation_result_verification", "nc_postprocessing_verification",
@@ -130,6 +131,11 @@ def build_server(settings: Settings | None = None):
     async def import_studio_model(path: str, units: str = "mm", allow_duplicate: bool = False) -> dict:
         """Import verified STL/SVG formats into a managed project via native Qt file APIs, preserve the source, save and inspect new geometry. units must be mm. Confirmed repeated imports are skipped unless allow_duplicate is true; no toolpath or machine action."""
         return await anyio.to_thread.run_sync(studio.import_model, path, units, allow_duplicate)
+
+    @server.tool(annotations=local_write)
+    async def set_studio_model_placement(model_uuid: str, center_mm: dict, project_sha256: str, world_rotation_deg: dict | None = None) -> dict:
+        """Place one verified single-mesh 3D model inside rectangular stock. center_mm requires x/y/z in the saved node/stock frame, not machine coordinates. Optional rotation is a relative single-world-axis delta in 90-degree increments, -180..180. Requires fresh inspect_studio_project SHA256; saves and checks matrix/center and unchanged SVG/CAM inputs. No scaling, multi-model placement or motion."""
+        return await anyio.to_thread.run_sync(studio.place_model, model_uuid, center_mm, project_sha256, world_rotation_deg)
 
     @server.tool(annotations=local_write)
     async def save_studio_project() -> dict:

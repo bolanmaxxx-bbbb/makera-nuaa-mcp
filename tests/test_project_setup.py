@@ -73,13 +73,16 @@ class ProjectSetupTests(unittest.TestCase):
     def test_utf8_stl_node_dimensions_come_from_saved_vertices(self):
         uid=test_skill_mcp_workflow.GEOMETRY;kind='fixtures/测试块.stl'.encode('utf-8')
         vertices=struct.pack('<ffffff',-5,-4,-2,5,4,2)
-        scene=struct.pack('<I',8)+b'scene_v3'+struct.pack('<I',len(kind))+kind+struct.pack('<I',36)+uid.encode()+b'\0'*98+struct.pack('<I',len(vertices))+vertices
+        matrix=struct.pack('<16f',1,0,0,0,0,1,0,0,0,0,1,0,20,30,-4,1)
+        scene=struct.pack('<I',8)+b'scene_v3'+struct.pack('<I',len(kind))+kind+struct.pack('<I',36)+uid.encode()+matrix+b'\0'*34+struct.pack('<I',len(vertices))+vertices
         with zipfile.ZipFile(self.path,'w') as z:
             z.writestr('makera.bin',scene)
             z.writestr('makera.prj',json.dumps({'project':{'lst3DModels':[{'name':'测试块.stl','list_meshes_uuids':[uid]}]}}))
         model=inspect_project(str(self.path))['models_3d'][0]
         self.assertTrue(model['geometry_dimensions_verified'])
         self.assertEqual(model['meshes'][0]['dimensions_mm'],{'x':10,'y':8,'z':4})
+        self.assertEqual(model['meshes'][0]['bounds_after_node_transform_mm'],{'x':[15,25],'y':[26,34],'z':[-6,-2]})
+        self.assertEqual(model['meshes'][0]['center_after_node_transform_mm'],{'x':20,'y':30,'z':-4})
 
 
 if __name__=='__main__':unittest.main()

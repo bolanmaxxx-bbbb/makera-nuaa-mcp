@@ -112,6 +112,80 @@ class NativeStudio:
             self._require_managed()
             return self._call('stock_options')
 
+    def place_model(self, model_uuid: str, center_mm: dict, project_sha256: str, world_rotation_deg: dict | None = None) -> dict:
+        """Place one single-mesh model in the serialized stock frame, with saved evidence."""
+        with self.lock:
+            self._require_managed()
+            def vector(value, label):
+                if not isinstance(value,dict) or set(value)!={'x','y','z'} or any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in value.values()):
+                    raise ValueError(f'{label} requires finite x/y/z values')
+                return [value[k] for k in 'xyz']
+            center = vector(center_mm, 'center_mm')
+            rotation = vector(world_rotation_deg if world_rotation_deg is not None else dict.fromkeys('xyz',0), 'world_rotation_deg')
+            if sum(v!=0 for v in rotation)>1 or any(abs(v)>180 or abs(v/90-round(v/90))>1e-9 for v in rotation):
+                raise ValueError('Only one world axis and explicit 90-degree increments within -180..180 are verified')
+            if not isinstance(model_uuid,str) or not re.fullmatch(r'[A-Za-z0-9-]{36}',model_uuid) or not isinstance(project_sha256,str) or not re.fullmatch(r'[a-f0-9]{64}',project_sha256):
+                raise ValueError('Expected the current native mesh UUID and project SHA256')
+            if self.pending_tabs or self.pending_tools:
+                raise RuntimeError('Commit or reopen pending CAM settings before model placement')
+            current = inspect_project(str(self.managed_project))
+            if current['sha256'] != project_sha256:
+                raise ValueError('Project changed; refresh the snapshot before model placement')
+            models = current.get('models_3d',[])
+            if len(models)!=1 or len(models[0].get('meshes',[]))!=1 or not models[0].get('geometry_dimensions_verified') or models[0]['meshes'][0]['uuid']!=model_uuid:
+                raise ValueError('Placement currently requires exactly one verified 3D model with one mesh')
+            model = models[0];mesh = model['meshes'][0];stock = current['stock']
+            if stock.get('StockShape')!=1 or any(not isinstance(stock.get(k),(int,float)) or not math.isfinite(stock[k]) or stock[k]<=0 for k in ('length','width','height')):
+                raise ValueError('Model placement currently requires verified rectangular stock')
+            if isinstance(model.get('id'),bool) or not isinstance(model.get('id'),int) or model['id']<0:
+                raise ValueError('Native model ID is missing')
+            matrix = mesh['matrix_column_major']
+            linear = [[matrix[row+4*col] for col in range(3)] for row in range(3)]
+            determinant = (linear[0][0]*(linear[1][1]*linear[2][2]-linear[1][2]*linear[2][1])
+                           -linear[0][1]*(linear[1][0]*linear[2][2]-linear[1][2]*linear[2][0])
+                           +linear[0][2]*(linear[1][0]*linear[2][1]-linear[1][1]*linear[2][0]))
+            if (any(abs(v-round(v))>1e-5 or abs(v)>1+1e-5 for row in linear for v in row)
+                    or any(abs(sum(abs(v) for v in row)-1)>1e-5 for row in linear)
+                    or any(abs(sum(abs(linear[r][c]) for r in range(3))-1)>1e-5 for c in range(3))
+                    or abs(determinant-1)>1e-5):
+                raise ValueError('Existing model transform must be unscaled and aligned to stock axes')
+            axis = next((i for i,v in enumerate(rotation) if v),0)
+            angle = math.radians(rotation[axis]);c,s = math.cos(angle),math.sin(angle)
+            turns = [((1,0,0),(0,c,-s),(0,s,c)),((c,0,s),(0,1,0),(-s,0,c)),((c,-s,0),(s,c,0),(0,0,1))]
+            expected_linear = [[sum(turns[axis][row][k]*matrix[k+4*col] for k in range(3)) for col in range(3)] for row in range(3)]
+            local = mesh['bounds_in_serialized_coordinates_mm']
+            corners = [(x,y,z) for x in local['x'] for y in local['y'] for z in local['z']]
+            rotated = [tuple(sum(expected_linear[r][k]*p[k] for k in range(3)) for r in range(3)) for p in corners]
+            expected_size = [max(p[i] for p in rotated)-min(p[i] for p in rotated) for i in range(3)]
+            limits = [(0,stock['length']),(0,stock['width']),(-stock['height'],0)]
+            if any(center[i]-expected_size[i]/2<lo-1e-4 or center[i]+expected_size[i]/2>hi+1e-4 for i,(lo,hi) in enumerate(limits)):
+                raise ValueError('Requested model bounding box extends outside the stock')
+            if self._call('path_summary')['modal_type']:
+                raise RuntimeError('Resolve the current dialog before model placement')
+            baseline = self.save_project()
+            if not baseline.get('saved'):
+                raise RuntimeError('Cannot establish a saved placement baseline')
+            # Unsaved edits must be reviewed as a new snapshot, not silently consumed.
+            if any(baseline['project'].get(k)!=current.get(k) for k in ('stock','svg_geometry','models_3d','operations')):
+                raise RuntimeError('Unsaved project changes were saved; refresh the placement snapshot')
+            native = self._call('place_single_model',model['id'],center,rotation)
+            saved = self.save_project()
+            after = saved.get('project',{})
+            updated = next((m for m in after.get('models_3d',[]) if m.get('id')==model['id']),{})
+            placed = next((m for m in updated.get('meshes',[]) if m.get('uuid')==model_uuid),{})
+            actual_matrix = placed.get('matrix_column_major',[])
+            pose_matches = len(actual_matrix)==16 and all(abs(actual_matrix[row+4*col]-expected_linear[row][col])<1e-4 for row in range(3) for col in range(3)) and all(abs(placed.get('center_after_node_transform_mm',{}).get(k,float('inf'))-center[i])<1e-4 for i,k in enumerate('xyz'))
+            untouched = (after.get('svg_geometry')==current['svg_geometry'] and after.get('stock')==current['stock']
+                         and len(after.get('models_3d',[]))==1 and len(updated.get('meshes',[]))==1
+                         and placed.get('dimensions_mm')==mesh['dimensions_mm'] and placed.get('vertex_count')==mesh['vertex_count'])
+            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings')
+            untouched = untouched and [{k:o.get(k) for k in op_keys} for o in after.get('operations',[])]==[{k:o.get(k) for k in op_keys} for o in current['operations']]
+            return {'verified':bool(native.get('invoked') and saved.get('saved') and pose_matches and untouched),
+                    'native_result':native,'model':updated,'unrelated_inputs_unchanged':untouched,
+                    'project':after,'recalculation_required':True,'placement_frame':'saved model node / nominal stock frame; not machine coordinates',
+                    'rotation_is_relative':True,'retry_requires_fresh_snapshot':True,
+                    'simulation_verified':False,'machining_ready':False,'machine_commands_sent':False}
+
     def configure_stock(self, specification: dict) -> dict:
         """Configure custom box/cylinder stock and exact native material labels."""
         with self.lock:

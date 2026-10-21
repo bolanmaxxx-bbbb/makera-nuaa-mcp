@@ -2,7 +2,7 @@
 
 让 Codex 通过 MCP 直接调用 Makera Studio，逐步规划、生成并核对 CAM 结果。附带可复用的 `makera-studio-cam` 技能，支持引导推荐、可修改模板和自定义工艺流程。摄像头采样是辅助观测能力。
 
-当前版本 **0.6.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
+当前版本 **0.7.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
 
 ```text
 Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
@@ -16,6 +16,7 @@ Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
 | 连接 Studio、核对程序指纹 | 已验证 |
 | 打开隔离 MKS、设置毛坯尺寸、保存回读 | 已验证 |
 | 导入 STL/SVG 并检查保存后的几何 | 已验证；STL须明确毫米单位，检查实际顶点尺寸 |
+| 单模型中心位置和单轴90°倍数旋转 | 已验证；单模型/单网格、方形毛坯内，保存矩阵及重开核对 |
 | 方形/圆棒毛坯、材料分类/名称、材料库规格 | 已验证；使用真实目录标签，保存后核对尺寸及材料 |
 | 注册刀具尺寸/材料参数、编辑器选刀 | 已验证；选刀参数在生成刀路时提交 |
 | 创建 2D 轮廓和钻孔工序 | 已验证 |
@@ -100,7 +101,7 @@ $makera-studio-cam
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
-技能已为当前35个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+技能已为当前36个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
 
 ## 软件验证流程
 
@@ -143,7 +144,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 & .\.venv\Scripts\python.exe -X utf8 .\scripts\validate_project_setup_mcp.py --project '<仅含几何的工程.mks>' --output-directory '.\cases\项目接口验证'
 ```
 
-脚本生成合成STL/SVG，验证导入尺寸、毛坯配置、无效材料回滚和重复导入识别，并检查源工程哈希不变。全部输出留在忽略目录，不执行机床运动。当前仍需已有MKS；从零新建/另存工程、模型平移旋转缩放尚未接通。
+脚本生成合成STL/SVG，验证导入尺寸、毛坯配置、无效材料回滚和重复导入识别，并检查源工程哈希不变。全部输出留在忽略目录，不执行机床运动。当前仍需已有MKS；从零新建/另存工程、多模型与通用变换尚未接通；v0.7仅支持下面列明的单模型摆放。
 
 
 ### v0.5：连接筋与显式超深
@@ -151,3 +152,17 @@ $env:PYTHONIOENCODING = 'utf-8'
 新增configure_studio_contour_tabs：在2D轮廓详情中设置自动支撑的数量、宽度、高度与形状，编辑器回读后通过generate_studio_toolpath计算保存。保存参数与支撑点分别报告；不宣称强度或实际留存已经验证。详情提交后须重新选刀并重算，避免原生详情页改写工具字段。
 
 set_studio_operation_depths新增through_cut_allowance_mm（默认0，范围0～2mm）；仅显式声明时才允许结束深度超出毛坯底面，并仍限制在10mm内。必须自行核对实际钻尖、参考面和垫板许可量；此接口不会建立现场基准或发送运动。
+
+### v0.7：单模型摆放与实际留料检查
+
+新增`set_studio_model_placement(model_uuid, center_mm, project_sha256, world_rotation_deg=None)`。当前只允许一个3D模型且仅含一个已验证网格、已有变换无缩放/镜像且轴对齐、方形毛坯内摆放；中心完整传`x/y/z`。可选旋转是单一世界轴、90°倍数、−180°～180°的相对增量，不支持多轴一次旋转、缩放或多模型。
+
+`inspect_studio_project`新增保存的模型矩阵、变换后尺寸/中心/包围范围。输入须带当前快照SHA256，变换后检查保存矩阵、实际中心及SVG/毛坯/工序输入未被改动。局部尺寸正确不代表方向或高度正确；模型节点/名义毛坯坐标也不是机床坐标。相对旋转超时后先检查现状，不盲目重试。
+
+仅含几何且不含3D模型的MKS可用于生成式验证：
+
+```powershell
+& .\.venv\Scripts\python.exe -X utf8 .\scripts\validate_model_placement_mcp.py --project '<几何工程.mks>' --output-directory '.\cases\模型摆放验证'
+```
+
+脚本通过真实MCP导入合成模型、旋转、移动、拒绝旧快照请求，并重开检查保存结果。技能新增[几何摆放与留件验收](skills/makera-studio-cam/references/geometry-and-retention.md)：核对3D参考与二维驱动几何、多个高度的实际留料，以及软件回归与正式交付的区别。连接筋设定宽度不保证实际残留宽度，几何扫掠检查不代替强度或仿真验证。

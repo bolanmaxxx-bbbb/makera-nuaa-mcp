@@ -118,6 +118,7 @@ function queueMethod(object,method,args=[],connection=2){
         data=Memory.alloc(8);const utf8=Memory.allocUtf8String(arg.value);keep.push(utf8);
         stringFromUtf8(data,utf8,-1);keep.push({qstring:data});
       }else if(arg.type==='double'){data=Memory.alloc(8);data.writeDouble(arg.value);}
+      else if(arg.type==='float'){data=Memory.alloc(4);data.writeFloat(arg.value);}
       else if(arg.type==='int'){data=Memory.alloc(4);data.writeS32(arg.value);}
       else if(arg.type==='bool'){data=Memory.alloc(1);data.writeU8(arg.value?1:0);}
       else if(arg.type==='QListWidgetItem*'){data=Memory.alloc(8);data.writePointer(arg.value);if(connection!==1)throw new Error('Item pointer must be used synchronously');}
@@ -134,6 +135,14 @@ function queueMethod(object,method,args=[],connection=2){
         data=Memory.alloc(24);data.writePointer(storage);data.add(8).writePointer(storage.add(arg.value.length*32));
         data.add(16).writePointer(storage.add(arg.value.length*32));
         if(connection!==1)throw new Error('Vector inputs must be copied synchronously on the GUI thread');
+      }
+      else if(arg.type==='QList<int>'){
+        if(connection!==1||!Array.isArray(arg.value)||arg.value.length>50||arg.value.some(v=>!Number.isInteger(v)||v<0))throw new Error('Expected synchronous model IDs');
+        const storage=Memory.alloc(16+8*arg.value.length);keep.push(storage);
+        // Qt5 x64 static input data; inline int nodes have pointer-sized stride.
+        storage.writeS32(-1);storage.add(4).writeS32(arg.value.length);storage.add(8).writeS32(0);storage.add(12).writeS32(arg.value.length);
+        arg.value.forEach((v,i)=>storage.add(16+8*i).writeS32(v));
+        data=Memory.alloc(8);data.writePointer(storage);
       }
       else throw new Error('Unsupported native argument type');
       keep.push(data);value.writePointer(data);value.add(8).writePointer(type);
@@ -206,6 +215,32 @@ function nameOf(object) {
   try {return readQString(result);} finally {destroyQString(result);}
 }
 rpc.exports = {
+  placeSingleModel(hwnd,modelId,center,rotation){return onGui(hwnd,()=>{
+    if(!activeModal().isNull()||!Number.isInteger(modelId)||modelId<0||![center,rotation].every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite))||rotation.filter(v=>v!==0).length>1)throw new Error('Invalid model placement');
+    const objects=treeOf(rootOf(hwnd)),areas=objects.filter(o=>o.name==='widgetDesign'&&o.type==='CutterPathDesignArea'),dialogs=objects.filter(o=>o.type==='MoveDlg'),actions=objects.filter(o=>o.name==='actionMove'&&o.type==='QAction');
+    if(areas.length!==1||dialogs.length!==1||actions.length!==1)throw new Error('Native model placement editor unavailable');
+    const area=ptr(areas[0].pointer),dialog=ptr(dialogs[0].pointer),fields=treeOf(dialog),targets=[];
+    for(const [i,axis] of ['X','Y','Z'].entries()){
+      const spins=fields.filter(o=>o.name==='doubleSpinBox'&&o.path.includes('/lineEdt_Move_'+axis+'/'));
+      const wrappers=fields.filter(o=>o.name==='lineEdt_Move_'+axis&&o.type==='UnitDoubleSpinBox');
+      if(spins.length!==1||wrappers.length!==1)throw new Error('Model center editor field unavailable');
+      const spin=ptr(spins[0].pointer),scale=10**spinDecimals(spin),value=center[i];
+      if(value<spinMin(spin)||value>spinMax(spin)||Math.abs(value*scale-Math.round(value*scale))>1e-6)throw new Error('Model center outside native range/precision');
+      targets.push({spin,wrapper:ptr(wrappers[0].pointer)});
+    }
+    // trigger() establishes Studio's native transform mode; calling the area slot
+    // directly can change its cached coordinates while leaving the model unchanged.
+    if(!queueMethod(ptr(actions[0].pointer),'trigger',[],1))throw new Error('Cannot enter native move mode');
+    if(!queueMethod(area,'sltSelectLayerOrModel',[{type:'QList<int>',value:[modelId]},{type:'bool',value:true}],1))throw new Error('Native model selection failed');
+    if(rotation.some(v=>v!==0)&&!queueMethod(area,'sltRotateObjWorld',rotation.map(value=>({type:'float',value})),1))throw new Error('Native model rotation rejected');
+    if(!queueMethod(dialog,'on_radioButton_center_clicked',[],1)||!queueMethod(dialog,'on_radioButton_3D_Center_clicked',[],1))throw new Error('Cannot select model center anchor');
+    const invoked=targets.map((t,i)=>queueMethod(t.spin,'setValue',[{type:'double',value:center[i]}],1));
+    for(const t of targets)invoked.push(queueMethod(t.wrapper,'editingFinished',[],1));
+    invoked.push(queueMethod(dialog,'sltPosChanged',[],1));
+    const readback=targets.map(t=>spinValue(t.spin));
+    invoked.push(queueMethod(dialog,'sltCloseWindow',[],1));
+    return {invoked:invoked.every(Boolean),editor_center_mm:readback,rotation_delta_deg:rotation};
+  });},
   cancelManagedFileDialog(hwnd){return onGui(hwnd,()=>{
     const modal=activeModal();if(modal.isNull()||classOf(modal)!=='QFileDialog')throw new Error('Expected file dialog');
     return {queued:queueMethod(modal,'reject',[],1)};
