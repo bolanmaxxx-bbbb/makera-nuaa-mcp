@@ -30,6 +30,7 @@ const spinDecimals=fn(widgets,'?decimals@QDoubleSpinBox@@','int',['pointer']);
 const labelText=fn(widgets,'?text@QLabel@@','pointer',['pointer','pointer']);
 const lineText=fn(widgets,'?text@QLineEdit@@','pointer',['pointer','pointer']);
 const comboText=fn(widgets,'?currentText@QComboBox@@','pointer',['pointer','pointer']);
+const comboIndex=fn(widgets,'?currentIndex@QComboBox@@','int',['pointer']);
 const comboCount=fn(widgets,'?count@QComboBox@@','int',['pointer']);
 const comboItemText=fn(widgets,'?itemText@QComboBox@@','pointer',['pointer','pointer','int']);
 const tableRows=fn(widgets,'?rowCount@QTableWidget@@QEBA','int',['pointer']);
@@ -51,6 +52,9 @@ const titleText=fn(widgets,'?windowTitle@QWidget@@','pointer',['pointer','pointe
 const buttonText=fn(widgets,'?text@QAbstractButton@@','pointer',['pointer','pointer']);
 const activeModal=fn(widgets,'?activeModalWidget@QApplication@@','pointer',[]);
 const stringFromUtf8=fn(core,'?fromUtf8@QString@@SA?AV1@PEBDH@Z','pointer',['pointer','pointer','int']);
+const fileDialogSelect=fn(widgets,'?selectFile@QFileDialog@@','void',['pointer','pointer']);
+const fileDialogSelected=fn(widgets,'?selectedFiles@QFileDialog@@','pointer',['pointer','pointer']);
+const metaDestruct=fn(core,'?destruct@QMetaType@@SAXHPEAX@Z','void',['int','pointer']);
 const invoke=fn(core,'?invokeMethod@QMetaObject@@SA_NPEAVQObject@@PEBDW4ConnectionType@Qt@@VQGenericArgument@@',
   'bool',['pointer','pointer','int',...Array(10).fill('pointer')]);
 const user32=Process.getModuleByName('user32.dll');
@@ -58,9 +62,25 @@ const getWindowThread=new NativeFunction(user32.getExportByName('GetWindowThread
 const postMessage=new NativeFunction(user32.getExportByName('PostMessageW'),'bool',['pointer','uint','pointer','pointer']);
 const guiJobs=[];
 let inGuiJob=false;
+let managedFileDialogThread=0;
+// Use Qt's own file picker for this one managed import, leaving other dialogs unchanged.
+const filePickerHook=Interceptor.attach(exp(widgets,'?getOpenFileNames@QFileDialog@@'),{
+  onEnter(args){
+    if(managedFileDialogThread===this.threadId){
+      args[6]=ptr(args[6].toUInt32()|0x10); // QFileDialog::DontUseNativeDialog
+      managedFileDialogThread=0;
+    }
+  }
+});
 // Run after the message polling API has returned. DispatchMessageW can remain
 // on the stack for an entire nested Qt modal loop; unloading that hook is unsafe.
-const messageHook=Interceptor.attach(user32.getExportByName('PeekMessageW'),{
+const pollAddresses=[user32.getExportByName('PeekMessageW')];
+// Native Windows file dialogs can poll win32u directly rather than the public wrappers.
+const win32u=Process.getModuleByName('win32u.dll');
+for(const api of ['NtUserPeekMessage']){
+  const address=win32u.findExportByName(api);if(address)pollAddresses.push(address);
+}
+const messageHooks=pollAddresses.map(address=>Interceptor.attach(address,{
   onLeave(){
     if(inGuiJob)return;
     const index=guiJobs.findIndex(j=>j.thread===this.threadId);
@@ -72,7 +92,7 @@ const messageHook=Interceptor.attach(user32.getExportByName('PeekMessageW'),{
     try{const result=job.work();setImmediate(()=>job.resolve(result));}
     catch(error){setImmediate(()=>job.reject(error));}finally{inGuiJob=false;}
   }
-});
+}));
 function onGui(hwnd,work){
   return new Promise((resolve,reject)=>{
     const job={thread:getWindowThread(ptr(hwnd),NULL),work,resolve,reject};
@@ -186,6 +206,106 @@ function nameOf(object) {
   try {return readQString(result);} finally {destroyQString(result);}
 }
 rpc.exports = {
+  cancelManagedFileDialog(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();if(modal.isNull()||classOf(modal)!=='QFileDialog')throw new Error('Expected file dialog');
+    return {queued:queueMethod(modal,'reject',[],1)};
+  });},
+  selectImportFile(hwnd,path){return onGui(hwnd,()=>{
+    const modal=activeModal();if(modal.isNull()||classOf(modal)!=='QFileDialog')throw new Error('Expected native file chooser');
+    if(typeof path!=='string'||!path.length)throw new Error('Expected an explicit local file path');
+    const value=Memory.alloc(8),utf8=Memory.allocUtf8String(path);stringFromUtf8(value,utf8,-1);
+    try{fileDialogSelect(modal,value);}finally{destroyQString(value);}
+    const fields=treeOf(modal).filter(o=>o.name==='fileNameEdit'&&isA(ptr(o.pointer),'QLineEdit'));
+    if(fields.length!==1)throw new Error('Expected managed Qt file-name field');
+    if(!queueMethod(ptr(fields[0].pointer),'setText',[{type:'QString',value:path}],1))throw new Error('File-name setter failed');
+    const list=Memory.alloc(8);fileDialogSelected(modal,list);let selected=[];
+    try{
+      const data=list.readPointer(),begin=data.add(8).readS32(),end=data.add(12).readS32();
+      if(begin<0||end<begin||end-begin>10)throw new Error('Unexpected file selection list');
+      for(let i=begin;i<end;i++)selected.push(readQString(data.add(16+i*8)));
+    }finally{metaDestruct(11,list);}
+    const normalized=s=>s.replace(/\\/g,'/').toLowerCase();
+    if(selected.length!==1||normalized(selected[0])!==normalized(path))throw new Error('Native file chooser did not select the requested path: '+JSON.stringify(selected));
+    return {selected,queued:queueMethod(modal,'accept',[],1)};
+  });},
+  openModelImport(hwnd){return onGui(hwnd,()=>{
+    const root=rootOf(hwnd);if(!activeModal().isNull())throw new Error('Resolve current dialog before import');
+    const areas=treeOf(root).filter(o=>o.name==='widgetDesign'&&o.type==='CutterPathDesignArea');
+    if(areas.length!==1)throw new Error('Expected one CAM design area');
+    managedFileDialogThread=getWindowThread(ptr(hwnd),NULL);
+    return {queued:queueMethod(ptr(areas[0].pointer),'sltOpen3DModel',[],2)};
+  });},
+  openStockEditor(hwnd){return onGui(hwnd,()=>{
+    if(!activeModal().isNull())throw new Error('Resolve current dialog before stock editing');
+    const buttons=treeOf(rootOf(hwnd)).filter(o=>o.name==='btnImgProInfoLabelsSetUp'&&o.path.includes('/PathListWidget/')&&isA(ptr(o.pointer),'QPushButton'));
+    if(buttons.length!==1)throw new Error('Expected one current project stock settings action');
+    return {queued:queueMethod(ptr(buttons[0].pointer),'click',[],2)};
+  });},
+  stockOptions(hwnd){return onGui(hwnd,()=>{
+    const editors=treeOf(rootOf(hwnd)).filter(o=>o.name==='wgtCusProjectInfo'&&o.type==='ProjectBasicInfoWidget');
+    if(editors.length!==1)throw new Error('Expected one project stock editor');
+    const editor=ptr(editors[0].pointer),objects=treeOf(editor),result={editor_visible:visible(editor)};
+    for(const name of ['cmbShape','cmbMaterial','cmbMaterial_2','cmbMaterial_3']){
+      const matches=objects.filter(o=>o.name===name);if(matches.length!==1||!isA(ptr(matches[0].pointer),'QComboBox'))throw new Error('Expected stock selector '+name);
+      const p=ptr(matches[0].pointer),options=[];
+      for(let i=0;i<comboCount(p);i++){const text=Memory.alloc(8);comboItemText(p,text,i);try{options.push(readQString(text));}finally{destroyQString(text);}}
+      result[name]={value:getText(p,comboText),options,visible:visible(p),enabled:enabled(p)};
+    }
+    return result;
+  });},
+  configureStockEditor(hwnd,spec){return onGui(hwnd,()=>{
+    if(!activeModal().isNull())throw new Error('Resolve dialog before stock configuration');
+    const editors=treeOf(rootOf(hwnd)).filter(o=>o.name==='wgtCusProjectInfo'&&o.type==='ProjectBasicInfoWidget');
+    if(editors.length!==1)throw new Error('Expected project stock editor');
+    const editor=ptr(editors[0].pointer),objects=treeOf(editor);
+    const find=name=>{const a=objects.filter(o=>o.name===name);if(a.length!==1)throw new Error('Missing stock field '+name);return ptr(a[0].pointer);};
+    const names={x:'dspbLength',y:'dspbWidth',z:'dspbHeight',diameter:'dspbDiameter'},targets={};
+    for(const [key,name] of Object.entries(names)){
+      const wrapper=find(name),spins=childObjects(wrapper).filter(p=>isA(p,'QDoubleSpinBox'));
+      if(spins.length!==1)throw new Error('Unexpected stock size control');
+      targets[key]={wrapper,spin:spins[0],old:spinValue(spins[0])};
+      if(spec.dimensions_mm[key]!==undefined){
+        const v=spec.dimensions_mm[key],scale=10**spinDecimals(spins[0]);
+        if(!Number.isFinite(v)||v<=0||v<spinMin(spins[0])||v>spinMax(spins[0])||Math.abs(v*scale-Math.round(v*scale))>1e-6)throw new Error('Stock dimension outside native range/precision: '+key);
+      }
+    }
+    const boxes=Object.fromEntries(['cmbShape','cmbMaterial','cmbMaterial_2','cmbMaterial_3'].map(name=>[name,find(name)]));
+    const before=Object.fromEntries(Object.entries(boxes).map(([name,p])=>[name,{index:comboIndex(p),text:getText(p,comboText)}]));
+    const exact=(box,text)=>{let rows=[];for(let i=0;i<comboCount(box);i++){const t=Memory.alloc(8);comboItemText(box,t,i);try{if(readQString(t)===text)rows.push(i);}finally{destroyQString(t);}}if(rows.length!==1)throw new Error('Stock catalog item unavailable: '+text);return rows[0];};
+    const choose=(name,index,slot)=>{if(!queueMethod(boxes[name],'setCurrentIndex',[{type:'int',value:index}],1))throw new Error('Stock selector failed');if(slot&&!queueMethod(editor,slot,[{type:'int',value:index}],1))throw new Error('Stock commit failed');};
+    const writeSize=(key,value)=>{const t=targets[key];if(!queueMethod(t.spin,'setValue',[{type:'double',value}],1)||!queueMethod(t.wrapper,'editingFinished',[],1))throw new Error('Stock dimension commit failed');};
+    if(spec.material_category)exact(boxes.cmbMaterial,spec.material_category);
+    if(spec.shape&&!['box','cylinder'].includes(spec.shape))throw new Error('Unsupported stock shape');
+    try{
+      if(spec.shape){
+        const desired=spec.shape==='box'?1:0;
+        if(comboCount(boxes.cmbShape)!==2)throw new Error('Unexpected stock shape selector');
+        choose('cmbShape',desired,'on_cmbShape_activated');
+      }
+      if(spec.material_category){
+        choose('cmbMaterial',exact(boxes.cmbMaterial,spec.material_category),'sltCmbMaterialIndexChanged');
+        choose('cmbMaterial_2',exact(boxes.cmbMaterial_2,spec.material_name),'sltCmbMaterial_2IndexChanged');
+      }
+      if(spec.stock_specification){choose('cmbMaterial_3',exact(boxes.cmbMaterial_3,spec.stock_specification),'sltCmbMaterial_3IndexChanged');}
+      else if(Object.keys(spec.dimensions_mm).length){choose('cmbMaterial_3',0,'sltCmbMaterial_3IndexChanged');}
+      for(const [key,value] of Object.entries(spec.dimensions_mm))writeSize(key,value);
+      return {verified:true,dimensions_mm:Object.fromEntries(Object.entries(targets).map(([key,t])=>[key,spinValue(t.spin)])),shape_index:comboIndex(boxes.cmbShape),material_category:getText(boxes.cmbMaterial,comboText),material_name:getText(boxes.cmbMaterial_2,comboText),stock_specification:getText(boxes.cmbMaterial_3,comboText)};
+    }catch(error){
+      try{
+        choose('cmbMaterial',before.cmbMaterial.index,'sltCmbMaterialIndexChanged');
+        choose('cmbMaterial_2',exact(boxes.cmbMaterial_2,before.cmbMaterial_2.text),'sltCmbMaterial_2IndexChanged');
+        choose('cmbMaterial_3',exact(boxes.cmbMaterial_3,before.cmbMaterial_3.text),'sltCmbMaterial_3IndexChanged');
+        choose('cmbShape',before.cmbShape.index,'on_cmbShape_activated');
+        for(const [key,target] of Object.entries(targets))writeSize(key,target.old);
+        return {verified:false,rolled_back:true,reason:String(error)};
+      }catch(rollbackError){throw new Error('Stock configuration failed and rollback is incomplete: '+String(error)+' / '+String(rollbackError));}
+    }
+  });},
+  closeStockEditor(hwnd){return onGui(hwnd,()=>{
+    const editors=treeOf(rootOf(hwnd)).filter(o=>o.name==='wgtCusProjectInfo'&&o.type==='ProjectBasicInfoWidget');
+    if(editors.length!==1||!activeModal().isNull())throw new Error('Stock editor unavailable');
+    return {queued:queueMethod(ptr(editors[0].pointer),'sltCloseWindow',[],1)};
+  });},
   configureContourTabs(hwnd,count,width,height,shape){return onGui(hwnd,()=>{
     if(!activeModal().isNull()||!Number.isInteger(count)||count<1||count>100||![width,height].every(x=>Number.isFinite(x)&&x>0&&x<=10)||!['rectangle','triangle'].includes(shape))throw new Error('Invalid automatic tab settings or active dialog');
     const editors=treeOf(rootOf(hwnd)).filter(o=>o.type==='Contour2DPathWgt'&&visible(ptr(o.pointer)));

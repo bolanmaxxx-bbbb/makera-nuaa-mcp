@@ -25,7 +25,9 @@ async def smoke(live: bool):
             await client.initialize()
             tools = await client.list_tools()
             output["tools"] = [tool.name for tool in tools.tools]
-            assert len(tools.tools) == 23
+            catalog = json.loads((ROOT / "skills" / "makera-studio-cam" / "assets" / "mcp-tool-map.json").read_text(encoding="utf-8"))
+            expected = {entry["name"] for entry in catalog["tools"]}
+            assert set(output["tools"]) == expected, "Exposed tools differ from the skill catalog"
             assert {"create_cam_task", "get_next_cam_action", "revise_cam_task"}.issubset(output["tools"])
             for name, arguments in [("get_capabilities", {}), ("get_studio_state", {}), ("get_camera_status", {})]:
                 result = await client.call_tool(name, arguments)

@@ -1,11 +1,14 @@
 {
   "schema_version": 1,
-  "validated_server_version": "0.5.0",
+  "validated_server_version": "0.6.0",
   "tools": [
     {"name":"get_capabilities","route":"discovery","reference":"references/mcp-execution.md","requires":[]},
     {"name":"connect_studio","route":"project","reference":"references/mcp-execution.md","requires":["native_studio_connection"]},
     {"name":"open_studio_project","route":"project","reference":"references/mcp-execution.md","requires":["native_project_open"]},
     {"name":"set_stock_dimensions","route":"project","reference":"references/mcp-execution.md","requires":["native_stock_dimensions_and_commit"]},
+    {"name":"get_studio_stock_options","route":"project","reference":"references/mcp-execution.md","requires":["native_stock_catalog_readback"]},
+    {"name":"configure_studio_stock","route":"project","reference":"references/mcp-execution.md","requires":["native_stock_shape_material_dimensions_saved"]},
+    {"name":"import_studio_model","route":"project","reference":"references/mcp-execution.md","requires":["native_model_import_stl_svg_with_saved_geometry"]},
     {"name":"save_studio_project","route":"project","reference":"references/mcp-execution.md","requires":["native_project_save_and_file_reinspection"]},
     {"name":"get_studio_operations","route":"cam","reference":"references/mcp-execution.md","requires":["svg_geometry_uuid_and_vertex_bounds_inspection"]},
     {"name":"create_2d_contour","route":"cam","reference":"references/mcp-execution.md","requires":["native_2d_contour_creation_geometry_selection_depth"]},

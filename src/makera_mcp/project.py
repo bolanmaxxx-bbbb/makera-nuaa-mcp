@@ -16,7 +16,8 @@ def scene_vertices(scene: bytes, uuid: str, kind: str) -> dict:
     """
     if scene[:12] != struct.pack('<I', 8) + b'scene_v3':
         raise ValueError('Unsupported native scene layout')
-    marker = struct.pack('<I', len(kind)) + kind.encode('ascii') + struct.pack('<I', 36) + uuid.encode('ascii')
+    encoded_kind = kind.encode('utf-8')
+    marker = struct.pack('<I', len(encoded_kind)) + encoded_kind + struct.pack('<I', 36) + uuid.encode('ascii')
     if scene.count(marker) != 1:
         raise ValueError('Expected one matching native geometry record')
     end = scene.index(marker) + len(marker)
@@ -40,6 +41,30 @@ def project_paths(path: str) -> list:
     with zipfile.ZipFile(path) as archive:
         project = json.loads(archive.read('makera.prj'))['project']
     return [p for coordinate in (project.get('lstCoordinate') or {}).values() for p in coordinate.get('path') or []]
+
+
+def model_mesh_vertices(scene: bytes, uuid: str) -> dict:
+    """STL mesh nodes use a UTF-8 source filename as their serialized node kind."""
+    marker = struct.pack('<I', 36) + uuid.encode('ascii')
+    if scene.count(marker) != 1:
+        raise ValueError('Expected one 3D model UUID record')
+    end = scene.index(marker)
+    candidates = []
+    for start in range(max(12, end-4096), end-4):
+        length = end-start-4
+        if struct.unpack_from('<I', scene, start)[0] == length:
+            try:
+                kind = scene[start+4:end].decode('utf-8')
+            except UnicodeDecodeError:
+                continue
+            if kind.lower().endswith(('.stl', '.step', '.stp')) and not any(ord(c)<32 for c in kind):
+                candidates.append(kind)
+    if len(candidates) != 1:
+        raise ValueError('Unrecognized native 3D node layout')
+    result = scene_vertices(scene, uuid, candidates[0])
+    bounds = result['bounds_in_serialized_coordinates_mm']
+    result['dimensions_mm'] = {axis: bounds[axis][1]-bounds[axis][0] for axis in 'xyz'}
+    return result
 
 
 def inspect_project(path: str) -> dict:
@@ -66,6 +91,16 @@ def inspect_project(path: str) -> dict:
                 svg_geometry.append(scene_vertices(scene, match.group(1).decode('ascii'), 'SvgShape'))
             except ValueError:
                 pass
+        models_3d = []
+        for model in project.get('lst3DModels') or []:
+            meshes, errors = [], []
+            for uid in model.get('list_meshes_uuids') or []:
+                try:
+                    meshes.append(model_mesh_vertices(scene, uid))
+                except (ValueError, struct.error) as error:
+                    errors.append(str(error))
+            models_3d.append({**model, 'meshes': meshes, 'mesh_read_errors': errors,
+                              'geometry_dimensions_verified': bool(meshes) and not errors})
         operations = []
         for coordinate_name, coordinate in coordinates.items():
             for native_path in coordinate.get('path') or []:
@@ -97,9 +132,9 @@ def inspect_project(path: str) -> dict:
                     'calculation_evidence_verified': native_path.get('emPathState') == 1 and bool(meshes) and len(meshes)+len(auxiliary) == len(mesh_ids) and not errors})
         return {"path": str(target), "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 "project_name": project.get("strProjectName"), "machine_profile": project.get("machine"),
-                "stock": {key: stock.get(key) for key in ("length", "width", "height", "material", "materialobj", "materialspec")},
+                "stock": {key: stock.get(key) for key in ("length", "width", "height", "diameter", "StockShape", "bUsingMaterialSize", "material", "materialobj", "materialspec")},
                 "geometry_layers": geometry_layers, "native_path_entries": path_entries,
-                "svg_geometry": svg_geometry, "operations": operations,
+                "svg_geometry": svg_geometry, "models_3d": models_3d, "operations": operations,
                 "verified_calculated_operations": sum(o['calculation_evidence_verified'] for o in operations),
                 "native_toolpath_counter": project.get("nToolPathesMaxNum"),
                 "geometry_only_detected": path_entries == 0 and project.get("nToolPathesMaxNum", 0) == 0,

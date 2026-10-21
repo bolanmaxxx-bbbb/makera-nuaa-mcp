@@ -107,6 +107,135 @@ class NativeStudio:
     def stock_fields(self) -> list:
         return self._call("stock_fields")
 
+    def stock_options(self) -> dict:
+        with self.lock:
+            self._require_managed()
+            return self._call('stock_options')
+
+    def configure_stock(self, specification: dict) -> dict:
+        """Configure custom box/cylinder stock and exact native material labels."""
+        with self.lock:
+            self._require_managed()
+            allowed = {'shape', 'dimensions_mm', 'material_category', 'material_name', 'stock_specification'}
+            if not isinstance(specification, dict) or not specification or set(specification)-allowed:
+                raise ValueError('Expected shape/dimensions_mm/material_category/material_name/stock_specification fields')
+            shape = specification.get('shape')
+            if shape is not None and shape not in ('box', 'cylinder'):
+                raise ValueError('Stock shape must be box or cylinder')
+            dimensions = specification.get('dimensions_mm', {})
+            if not isinstance(dimensions, dict) or set(dimensions)-{'x', 'y', 'z', 'diameter'} or any(isinstance(v, bool) or not isinstance(v, (int,float)) or not math.isfinite(v) or v<=0 for v in dimensions.values()):
+                raise ValueError('Stock dimensions must be positive finite mm values')
+            if shape and set(dimensions) != ({'x','y','z'} if shape=='box' else {'diameter','z'}):
+                raise ValueError('Explicit shape changes require all dimensions for that shape')
+            if dimensions and not shape:
+                raise ValueError('Full stock dimensions require explicit box/cylinder shape')
+            material = [specification.get(k) for k in ('material_category','material_name')]
+            if any(v is not None for v in material) and not all(isinstance(v,str) and v.strip() for v in material):
+                raise ValueError('Provide both exact native material category and name')
+            preset = specification.get('stock_specification')
+            if preset is not None and (not isinstance(preset,str) or not preset.strip() or not all(material) or dimensions or shape):
+                raise ValueError('A stock catalog specification requires category/name and cannot be combined with custom shape/dimensions')
+            if not dimensions and not shape and not all(material):
+                raise ValueError('No stock configuration was requested')
+            if self.pending_tabs:
+                raise RuntimeError('Commit or reopen pending contour details before stock editing')
+            baseline = self.save_project()
+            if not baseline.get('saved'):
+                raise RuntimeError('Cannot establish saved stock baseline')
+            live = self._call('path_summary')
+            if live['modal_type']:
+                raise RuntimeError('Resolve active dialog before stock editing')
+            if not self._call('stock_options')['editor_visible']:
+                if not self._call('open_stock_editor')['queued']:
+                    raise RuntimeError('Cannot open project stock settings')
+                self._call('barrier')
+            result = self._call('configure_stock_editor', {**specification,'dimensions_mm':dimensions})
+            self._call('close_stock_editor')
+            saved = self.save_project()
+            stock = saved.get('project',{}).get('stock',{})
+            keys = {'x':'length','y':'width','z':'height','diameter':'diameter'}
+            dimensions_match = all(isinstance(stock.get(keys[k]),(int,float)) and abs(stock[keys[k]]-v)<1e-6 for k,v in dimensions.items())
+            material_matches = not all(material) or ((stock.get('material') or {}).get('name')==material[0] and (stock.get('materialobj') or {}).get('materialSubcategoryName')==material[1])
+            shape_matches = shape is None or stock.get('StockShape')=={'box':1,'cylinder':0}[shape]
+            preset_record = stock.get('materialspec') or {}
+            preset_matches = preset is None or preset_record.get('materialName')==preset
+            if preset and preset_matches:
+                preset_keys = ('diameter','height') if stock.get('StockShape')==0 else ('length','width','height')
+                preset_matches = all(isinstance(stock.get(k),(int,float)) and isinstance(preset_record.get(k),(int,float)) and abs(stock[k]-preset_record[k])<1e-6 for k in preset_keys)
+            verified = bool(result.get('verified') and saved.get('saved') and dimensions_match and material_matches and shape_matches and preset_matches)
+            return {'verified':verified,'native_result':result,'saved_stock':stock,
+                    'rollback_saved_verified':bool(result.get('rolled_back') and saved.get('saved') and stock==baseline['project']['stock']),
+                    'project':saved.get('project'),'recalculation_required':True,
+                    'material_parameters_verified_for_cutting':False,
+                    'machine_commands_sent':False,'machining_ready':False}
+
+    def import_model(self, path: str, units: str = 'mm', allow_duplicate: bool = False) -> dict:
+        """Import through the managed native file chooser, save and verify new geometry."""
+        with self.lock:
+            self._require_managed()
+            source = Path(path).resolve(strict=True)
+            if source.suffix.lower() not in ('.stl','.svg') or not source.is_file():
+                raise ValueError('Only STL and SVG imports are currently verified')
+            if units != 'mm' or not isinstance(allow_duplicate,bool):
+                raise ValueError('Import units must explicitly be mm and allow_duplicate must be boolean')
+            if not 0 < source.stat().st_size <= 64*1024*1024:
+                raise ValueError('Expected a nonempty model no larger than 64 MiB')
+            if self.pending_tabs:
+                raise RuntimeError('Commit or reopen pending contour details before import')
+            identity = {'path':str(source),'bytes':source.stat().st_size,'sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'declared_units':units}
+            baseline = self.save_project()
+            if not baseline.get('saved'):
+                raise RuntimeError('Cannot establish saved import baseline')
+            before = baseline['project']
+            old_svg = {v['uuid'] for v in before['svg_geometry']}
+            old_models = {uid for m in before.get('models_3d',[]) for uid in m.get('list_meshes_uuids',[])}
+            ledger_path = self.managed_project.with_suffix('.imports.json')
+            ledger = json.loads(ledger_path.read_text(encoding='utf-8')) if ledger_path.exists() else []
+            for record in ledger:
+                ids = set(record.get('native_geometry_ids',[]))
+                if not allow_duplicate and record.get('sha256')==identity['sha256'] and ids and ids <= old_svg|old_models:
+                    return {'imported':True,'outcome':'already_present','source':identity,'native_geometry_ids':sorted(ids),'native_mutation_performed':False,'machine_commands_sent':False,'machining_ready':False}
+            if self._call('path_summary')['modal_type']:
+                raise RuntimeError('Resolve the current dialog before importing')
+            if not self._call('open_model_import')['queued']:
+                raise RuntimeError('Native import action rejected')
+            self._wait_modal('QFileDialog')
+            try:
+                selection = self._call('select_import_file',str(source))
+            except Exception:
+                if self._call('path_summary')['modal_type']=='QFileDialog':
+                    self._call('cancel_managed_file_dialog')
+                raise
+            if not selection.get('queued'):
+                raise RuntimeError('Native file selection was not accepted')
+            deadline = time.monotonic()+30
+            last = before
+            while time.monotonic() < deadline:
+                modal = self._call('path_summary')['modal_type']
+                if modal:
+                    if modal=='QProgressDialog':
+                        time.sleep(.1)
+                        continue
+                    return {'imported':False,'outcome':'waiting_for_native_dialog','modal_type':modal,'source':identity,'machining_ready':False}
+                saved = self.save_project()
+                if saved.get('saved'):
+                    last = saved['project']
+                    new_svg = [v for v in last['svg_geometry'] if v['uuid'] not in old_svg]
+                    new_models = [m for m in last.get('models_3d',[]) if set(m.get('list_meshes_uuids',[]))-old_models]
+                    found = bool(new_svg) if source.suffix.lower()=='.svg' else any(m.get('name')==source.name and m.get('geometry_dimensions_verified') for m in new_models)
+                    if found:
+                        if hashlib.sha256(source.read_bytes()).hexdigest()!=identity['sha256']:
+                            return {'imported':False,'outcome':'source_changed_during_import','project':last,'machining_ready':False}
+                        ids = [v['uuid'] for v in new_svg]+[uid for m in new_models for uid in m.get('list_meshes_uuids',[]) if uid not in old_models]
+                        ledger.append({**identity,'native_geometry_ids':ids})
+                        ledger_path.write_text(json.dumps(ledger,ensure_ascii=False,indent=2),encoding='utf-8')
+                        return {'imported':True,'saved_verified':True,'source':identity,'native_geometry_ids':ids,
+                                'new_svg_geometry':new_svg,'new_models_3d':new_models,'project':last,
+                                'placement_is_not_machine_origin':True,'toolpaths_generated':False,
+                                'machine_commands_sent':False,'machining_ready':False}
+                time.sleep(.1)
+            return {'imported':False,'outcome':'import_not_verified_before_timeout','source':identity,'last_saved_project':last,'machining_ready':False}
+
     def _require_managed(self):
         if self.managed_project is None:
             raise RuntimeError('Open an isolated project with this MCP before editing CAM')

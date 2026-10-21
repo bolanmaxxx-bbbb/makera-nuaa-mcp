@@ -6,9 +6,9 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.5.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.6.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整32工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整35工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 
@@ -16,6 +16,9 @@
 |---|---|---|
 | 打开隔离MKS | open_studio_project | opened=true、无未处理提示、目标项目匹配 |
 | 设置名义毛坯 | set_stock_dimensions | 原生回读及保存文件一致；不冒充实测 |
+| 导入STL/SVG | import_studio_model | 新几何UUID、源哈希及保存后的顶点尺寸；不等于刀路、摆放或机床原点已验收 |
+| 读取材料/规格选项 | get_studio_stock_options | 真实分类与当前分类的子选项，不猜牌号 |
+| 配置形状/材料/完整尺寸 | configure_studio_stock | verified、保存后的stock及失败回滚证据；修改后重算受影响工序 |
 | 注册刀具与参数 | register_studio_tool | 原生尺寸/材料参数表逐字段回读；优先使用已存在的项目专用组；当前未适配新建组，缺组时说明能力缺口，不覆盖其他任务条目 |
 | 选刀 | select_studio_tool | 编辑器匹配；工具参数在生成时提交，尚不代表已保存 |
 | 创建轮廓/钻孔 | create_2d_contour / create_2d_drilling | 几何UUID、区域尺寸、切深、工序类型匹配 |
@@ -70,3 +73,16 @@
 `set_studio_operation_depths`新增可选`through_cut_allowance_mm`，默认0，显式值限制在0～2mm，end仍不得超过10mm或毛坯厚度加该余量。创建工序仍先在毛坯内建立，再调用此工具设置所需区间。余量是允许写入的界限，不会自动增加实际切深，也不表示现场已允许钻入垫板；使用实际钻尖几何、贯穿量和用户确认的垫板许可量建立依据。该参数不改变Z基准或触发运动。
 
 原生数值框可能限制小数位；无法精确表达的深度或连接筋尺寸会在写入前被拒绝，不默默四舍五入。调用方须明确选择可表达的值，再重新核对贯穿量和许可上限。
+
+## 模型导入与毛坯（v0.6）
+
+1. 打开任务自己的隔离MKS；当前不能原生新建或另存工程。保存源MKS和导入文件的哈希，确认Studio无未处理提示。不得把历史案例复制成通用模板发布。
+2. 导入使用`import_studio_model(path, units="mm", allow_duplicate=false)`，目前仅STL/SVG，文件非空且不大于64MiB。STL无内置单位，明确来源单位并先换算；SVG的mm、px、viewBox和嵌套变换也须按已知尺寸复核。导入不自动创建任何CAM工序。
+3. 检查`imported`和`saved_verified`，保存返回的新UUID。STL检查`new_models_3d[].meshes[].dimensions_mm`；SVG检查`new_svg_geometry[].bounds_in_serialized_coordinates_mm`并核对目标。它们是模型/节点局部几何，不能据此声明最终布局、父变换或机床坐标正确。
+4. 相同文件在本项目已有确认导入记录、且对应UUID仍存在时返回`outcome=already_present`，无需再次导入。明确要第二份时才用`allow_duplicate=true`。超时、未知提示、源文件变化或未验证结果不具有可靠去重证据；先读当前项目再决定，不能循环重试。
+5. 调用`get_studio_stock_options()`读取`cmbMaterial`（分类）、`cmbMaterial_2`（当前分类下材料）和`cmbMaterial_3`（当前材料规格）。当前接口不浏览所有分类的全部子项；目标标签未提供时不要猜，报告目录查询的缺口。Studio未收录的牌号保留在任务记录中，不能自动用通用材料替代。
+6. 自定义方形示例：`configure_studio_stock({"shape":"box","dimensions_mm":{"x":40,"y":30,"z":6}})`；圆棒示例：`{"shape":"cylinder","dimensions_mm":{"diameter":20,"z":8}}`。数值仅是结构示例。形状变化必须提交该形状所需的完整尺寸；只改材料时成对提交`material_category/material_name`。
+7. 材料库规格使用`{"material_category":"<真实分类>","material_name":"<真实材料>","stock_specification":"<真实规格>"}`，不能混传自定义形状/尺寸。核对保存的规格名称、形状及实际尺寸，`bUsingMaterialSize`或界面标签不能单独证明尺寸已提交。目录尺寸仍是名义值。
+8. 配置成功必须检查`verified`和`saved_stock`。失败且返回`rolled_back`时再检查`rollback_saved_verified`；回滚不完整时停止依赖它的写入并保留现状。毛坯或模型变化需增加任务修订号，作废受影响的刀路、仿真及NC证据，重新检查深度、覆盖和夹具净空。
+
+材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录；未验证的模型变换、STEP等格式、三维工序不借任意Qt槽补齐。其余开发项见[能力覆盖清单](capability-coverage.md)。

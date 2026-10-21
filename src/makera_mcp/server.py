@@ -48,7 +48,8 @@ def build_server(settings: Settings | None = None):
     server = FastMCP(
         "Makera Studio Task Assistant", lifespan=lifespan,
         instructions=("Primary objective: complete the user's Studio CAM task, from inputs through toolpaths, simulation and NC delivery. "
-                      "Use the standalone native Qt bridge: connect_studio, open_studio_project, set_stock_dimensions, save_studio_project. "
+                      "Use the standalone native Qt bridge for managed project import, stock configuration and verified planar CAM. "
+                      "Read get_capabilities first; simulation and NC export are not yet implemented. "
                       "No Computer Use, screenshots, accessibility, mouse or keyboard injection is required. "
                       "Only isolated projects under cases/ may be modified in this development release. "
                       "Camera sampling is optional supporting evidence, never the task's completion criterion. "
@@ -84,10 +85,15 @@ def build_server(settings: Settings | None = None):
                               "native_2d_drilling_and_verified_peck_retraction_sequence",
                               "native_pocket_calculation_and_verification", "native_planar_start_end_depth_commit",
                               "native_contour_tabs_editor_and_saved_parameters", "native_explicit_through_cut_allowance",
+                              "native_model_import_stl_svg_with_saved_geometry", "native_stock_catalog_readback",
+                              "native_stock_shape_material_dimensions_saved",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
-                "not_implemented": ["other_tool_geometry_fields", "remaining_operation_types", "simulation_result_verification",
+                "not_implemented": ["other_model_import_formats", "model_transform_commit", "native_project_creation_save_as",
+                                    "tool_group_creation", "other_tool_geometry_fields", "operation_reorder_copy_delete",
+                                    "full_facing_to_thickness_workflow", "fixture_clearance_verification",
+                                    "task_stage_completion_commit", "remaining_operation_types", "simulation_result_verification", "nc_postprocessing_verification",
                                     "direct_controller_telemetry", "machine_motion", "automatic_anomaly_classification"],
                 "studio_state": "Reads Qt object properties independently through a persistent native bridge; no expired UI snapshot dependency",
                 "integration_status": "Unofficial internal Qt adapter; executable fingerprint pinned; not a Makera public SDK",
@@ -109,6 +115,21 @@ def build_server(settings: Settings | None = None):
     async def set_stock_dimensions(dimensions_mm: dict) -> dict:
         """Set x/y/z through native Qt value setters and commit signals; verify native property readback. Does not move the machine."""
         return await anyio.to_thread.run_sync(studio.set_stock, dimensions_mm)
+
+    @server.tool(annotations=readonly)
+    async def get_studio_stock_options() -> dict:
+        """Read exact available stock shape/material catalog labels in the managed project. Does not equate a generic catalog material with the actual workpiece grade."""
+        return await anyio.to_thread.run_sync(studio.stock_options)
+
+    @server.tool(annotations=local_write)
+    async def configure_studio_stock(specification: dict) -> dict:
+        """Configure/save stock. Custom box requires dimensions_mm x/y/z; cylinder requires diameter/z. Exact material_category/material_name can be set together. Alternatively pass those plus stock_specification to select a catalog preset, without custom dimensions. Read back saved fields; regenerate old toolpaths."""
+        return await anyio.to_thread.run_sync(studio.configure_stock, specification)
+
+    @server.tool(annotations=local_write)
+    async def import_studio_model(path: str, units: str = "mm", allow_duplicate: bool = False) -> dict:
+        """Import verified STL/SVG formats into a managed project via native Qt file APIs, preserve the source, save and inspect new geometry. units must be mm. Confirmed repeated imports are skipped unless allow_duplicate is true; no toolpath or machine action."""
+        return await anyio.to_thread.run_sync(studio.import_model, path, units, allow_duplicate)
 
     @server.tool(annotations=local_write)
     async def save_studio_project() -> dict:

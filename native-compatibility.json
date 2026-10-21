@@ -1,7 +1,7 @@
 {
   "studio_sha256": "976d91960ca0a517d8d2b5bad54fdacd0d9e28798c7149632527dc08af8430ae",
-  "validated_date": "2026-10-20",
+  "validated_date": "2026-10-21",
   "architecture": "x64",
   "qt": "5",
-  "scope": "native project/stock/save, planar pocket/contour/drilling, explicit start/end depths and backing allowance, automatic contour tab settings, tool geometry and rates; no machine motion or license/auth modifications"
+  "scope": "native project/open/save, STL/SVG import with saved geometry, box/cylinder stock with exact materials/catalog presets, planar pocket/contour/drilling, explicit start/end depths and backing allowance, automatic contour tab settings, tool geometry and rates; no machine motion or license/auth modifications"
 }

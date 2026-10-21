@@ -2,7 +2,7 @@
 
 让 Codex 通过 MCP 直接调用 Makera Studio，逐步规划、生成并核对 CAM 结果。附带可复用的 `makera-studio-cam` 技能，支持引导推荐、可修改模板和自定义工艺流程。摄像头采样是辅助观测能力。
 
-当前版本 **0.5.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
+当前版本 **0.6.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
 
 ```text
 Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
@@ -15,6 +15,8 @@ Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
 |---|---|
 | 连接 Studio、核对程序指纹 | 已验证 |
 | 打开隔离 MKS、设置毛坯尺寸、保存回读 | 已验证 |
+| 导入 STL/SVG 并检查保存后的几何 | 已验证；STL须明确毫米单位，检查实际顶点尺寸 |
+| 方形/圆棒毛坯、材料分类/名称、材料库规格 | 已验证；使用真实目录标签，保存后核对尺寸及材料 |
 | 注册刀具尺寸/材料参数、编辑器选刀 | 已验证；选刀参数在生成刀路时提交 |
 | 创建 2D 轮廓和钻孔工序 | 已验证 |
 | 创建 2D 区域清理/平面型腔 | 已验证；原生工序类型0，使用选定SVG区域 |
@@ -25,6 +27,8 @@ Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
 | 完整面铣定厚、三维型腔/曲面等其余流程 | 尚未完成适配；区域清理不能直接视为完整定厚链 |
 | 仿真结果验证、NC 后处理交付 | 尚未实现 |
 | 机床探测、移动和切削控制 | 不提供 |
+
+完整流程的覆盖与开发顺序见[能力清单](skills/makera-studio-cam/references/capability-coverage.md)，包括工程新建、更多格式、模型布局、刀库、工序管理、多装夹、仿真、后处理及异常恢复。未接通的功能单独标注，不因技能中有流程名称而宣称可执行。
 
 原生桥会向正在运行的 Studio 进程加载桥接代码，不修改安装文件、不处理账户或授权。兼容性由 `native-compatibility.json` 中的可执行文件指纹限制；其他 Studio 版本需要重新验证，不能仅更换哈希就认为兼容。
 
@@ -96,7 +100,7 @@ $makera-studio-cam
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
-技能已为当前32个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+技能已为当前35个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
 
 ## 软件验证流程
 
@@ -126,6 +130,20 @@ $env:PYTHONIOENCODING = 'utf-8'
 `scripts/validate_planar_mcp.py`接受使用者自己的几何MKS和SVG UUID，创建全新副本验证区域清理及深度增减。输入项目须仅含几何，当前Studio须已保存且没有提示窗；脚本拒绝覆盖已有测试文件。输出报告保留在被Git忽略的runtime目录。
 
 接口参考：[Qt QMetaObject](https://doc.qt.io/archives/qt-5.15/qmetaobject.html)、[Frida JavaScript API](https://frida.re/docs/javascript-api/)。
+
+### v0.6：模型导入和完整毛坯配置
+
+新增`import_studio_model(path, units="mm", allow_duplicate=false)`，通过限定于本次导入的原生Qt文件选择器导入STL/SVG。保存后返回新几何UUID，STL尺寸来自实际序列化顶点；SVG返回局部顶点范围，仍须按目标尺寸检查单位。已确认的相同输入可识别为已存在；超时或未知提示时先检查现状，不盲目重试。STEP/STP、DXF及位图尚未验证，导入本身不生成刀路。
+
+`get_studio_stock_options()`读取当前毛坯的真实材料分类、材料及规格选项；子选项属于当前父分类。`configure_studio_stock(specification)`支持方形`box`的`x/y/z`、圆棒`cylinder`的`diameter/z`，以及准确的`material_category/material_name`标签。选材料库规格时传`stock_specification`，不要同时传自定义形状/尺寸。保存后核对实际值；材料不存在时回滚并检查保存结果，不自动替换牌号。名义毛坯、材料库尺寸和切削参数仍需分别核对。
+
+使用自己的仅含几何MKS运行真实MCP验证（当前Studio须已保存且无提示窗；输出目录必须不存在）：
+
+```powershell
+& .\.venv\Scripts\python.exe -X utf8 .\scripts\validate_project_setup_mcp.py --project '<仅含几何的工程.mks>' --output-directory '.\cases\项目接口验证'
+```
+
+脚本生成合成STL/SVG，验证导入尺寸、毛坯配置、无效材料回滚和重复导入识别，并检查源工程哈希不变。全部输出留在忽略目录，不执行机床运动。当前仍需已有MKS；从零新建/另存工程、模型平移旋转缩放尚未接通。
 
 
 ### v0.5：连接筋与显式超深
