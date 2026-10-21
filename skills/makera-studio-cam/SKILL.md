@@ -9,7 +9,7 @@ description: 使用 Makera/造物时代 Studio MCP 规划与执行CAM任务（�
 
 ## 工具入口与能力核对
 
-先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的31个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
+先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的32个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
 
 - 项目、毛坯、几何、刀具、区域清理/轮廓/钻孔、起止深度、计算保存、原生状态/方法诊断：读[MCP执行与验收](references/mcp-execution.md)。
 - 创建/继续/修订持久任务、job字段映射和实际调用参数：读[任务与调用参数](references/task-and-payloads.md)。新任务使用create_cam_task，继续时get/list，参数改变用完整spec调用revise；不凭摄像头或计划自动推进阶段。

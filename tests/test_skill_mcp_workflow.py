@@ -32,7 +32,7 @@ WORKFLOW = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WORKFLOW)
 CATALOG = json.loads((SKILL / "assets/mcp-tool-map.json").read_text(encoding="utf-8"))
 NAMES = [item["name"] for item in CATALOG["tools"]]
-CAPS = {"version": "0.4.0", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]})}
+CAPS = {"version": "0.5.0", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
 GEOMETRY = "12345678-1234-1234-1234-123456789abc"
 
 
@@ -130,6 +130,22 @@ class WorkflowPayloadTests(unittest.TestCase):
         self.binding["tool"]["mode"] = "select_existing"
         self.assertEqual([call["tool"] for call in self.calls()["calls"]], ["select_studio_tool"])
 
+    def test_tabs_are_staged_only_after_tool_verification(self):
+        self.configured()
+        self.job['operations'][0]['tabs']={'count':2,'width_mm':0.3,'height_mm':0.2,'shape':'rectangle'}
+        result=self.calls()
+        self.assertEqual(result['after_verification'][0]['tool'],'configure_studio_contour_tabs')
+        self.assertEqual(result['after_verification'][1]['tool'],'generate_studio_toolpath')
+        self.assertTrue(result['tabs_require_post_commit_tool_reselection'])
+
+    def test_explicit_allowance_is_forwarded_to_existing_depth_edit(self):
+        self.configured()
+        self.job['tools'][0]['flute_length_mm']=10
+        self.job['operations'][0].update(depth_mm=5.8,through_cut_allowance_mm=0.3)
+        result=self.calls()
+        self.assertEqual(result['phase'],'depth_only')
+        self.assertEqual(result['calls'][0]['arguments']['through_cut_allowance_mm'],0.3)
+
     def test_missing_or_nonfinite_stepover_is_not_invented(self):
         self.configured()
         for value in (None, float("nan"), 0):
@@ -182,7 +198,7 @@ class WorkflowPayloadTests(unittest.TestCase):
                         audited = WORKFLOW.audit(capabilities, [tool.model_dump() for tool in tools])
                         self.assertTrue(audited["full_catalog_available"])
                         self.assertTrue(audited["all_exposed_tools_routed"])
-                        self.assertEqual(audited["covered_count"], 31)
+                        self.assertEqual(audited["covered_count"], len(CATALOG["tools"]))
                         for call in packets["calls"] + packets["after_verification"]:
                             jsonschema.validate(call["arguments"], schemas[call["tool"]])
                 anyio.run(verify)

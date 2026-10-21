@@ -27,6 +27,7 @@ class NativeStudio:
         self.hwnd = None
         self.managed_project = None
         self.pending_tools = {}
+        self.pending_tabs = {}
 
     def connect(self) -> dict:
         with self.lock:
@@ -85,6 +86,7 @@ class NativeStudio:
                     self.session = self.script = None
                     self.managed_project = None
                     self.pending_tools = {}
+                    self.pending_tabs = {}
 
     def _call(self, method: str, *args):
         with self.lock:
@@ -291,7 +293,7 @@ class NativeStudio:
                     'tool_selection': 'current Studio default tool; inspect returned tool parameters before use',
                     'calculated': False, 'machining_ready': False}
 
-    def set_operation_depths(self, operation_index: int, start_depth_mm: float, end_depth_mm: float) -> dict:
+    def set_operation_depths(self, operation_index: int, start_depth_mm: float, end_depth_mm: float, through_cut_allowance_mm: float = 0) -> dict:
         """Commit an explicit planar depth interval; require fresh calculation afterward."""
         with self.lock:
             self._require_managed()
@@ -300,11 +302,13 @@ class NativeStudio:
             if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
                    for v in (start_depth_mm, end_depth_mm)) or not 0 <= start_depth_mm < end_depth_mm <= 10:
                 raise ValueError('Expected 0 <= start depth < end depth <= 10 mm')
+            if isinstance(through_cut_allowance_mm, bool) or not isinstance(through_cut_allowance_mm, (int, float)) or not math.isfinite(through_cut_allowance_mm) or not 0 <= through_cut_allowance_mm <= 2:
+                raise ValueError('Expected explicit through-cut allowance between 0 and 2 mm')
             baseline = inspect_project(str(self.managed_project))
             if operation_index >= len(baseline['operations']) or baseline['operations'][operation_index]['type'] not in (0, 1, 2):
                 raise ValueError('Expected an existing planar pocket/contour/drilling operation')
-            if end_depth_mm > baseline['stock']['height']:
-                raise ValueError('Depth exceeds stock height')
+            if end_depth_mm > baseline['stock']['height'] + through_cut_allowance_mm + 1e-9:
+                raise ValueError('Depth exceeds stock height plus explicitly permitted allowance')
             live = self._call('path_summary')
             if live['modal_type']:
                 raise RuntimeError('Resolve the active Studio dialog before editing depth')
@@ -320,8 +324,45 @@ class NativeStudio:
                         and abs(depth.get('startDepth', -1) - start_depth_mm) < 1e-6
                         and abs(depth.get('endDepth', -1) - end_depth_mm) < 1e-6)
             return {'verified': verified, 'operation_index': operation_index, 'operation': operation,
+                    'through_cut_allowance_mm': through_cut_allowance_mm,
                     'recalculation_required': True, 'simulation_verified': False,
                     'machine_commands_sent': False, 'machining_ready': False}
+
+    def configure_contour_tabs(self, operation_index: int, count: int, width_mm: float, height_mm: float, shape: str = 'rectangle') -> dict:
+        """Stage automatic tabs in native details. Generation is required to commit."""
+        with self.lock:
+            self._require_managed()
+            if isinstance(operation_index, bool) or not isinstance(operation_index, int) or operation_index < 0:
+                raise ValueError('Expected nonnegative contour operation index')
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 100:
+                raise ValueError('Expected tab count between 1 and 100')
+            if shape not in ('rectangle', 'triangle') or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 < v <= 10 for v in (width_mm, height_mm)):
+                raise ValueError('Invalid tab geometry')
+            baseline = inspect_project(str(self.managed_project))
+            if operation_index >= len(baseline['operations']) or baseline['operations'][operation_index]['type'] != 1:
+                raise ValueError('Tabs require an existing 2D contour operation')
+            op = baseline['operations'][operation_index]
+            depth = op.get('depth') or {}
+            if height_mm >= depth.get('endDepth', 0) - depth.get('startDepth', 0):
+                raise ValueError('Tab height must be smaller than the contour cutting interval')
+            if self.pending_tabs:
+                raise RuntimeError('Commit or reopen the project before staging another tab change')
+            live = self._call('path_summary')
+            if live['modal_type'] or len(live['paths']) != len(baseline['operations']):
+                raise RuntimeError('Dialog active or live operation order differs')
+            if not self._call('open_operation_details', operation_index)['queued']:
+                raise RuntimeError('Native detail editor did not open')
+            result = self._call('configure_contour_tabs', count, width_mm, height_mm, shape)
+            expected = {'supportTabs': 1, 'tabsAutoNums': count, 'tabsWidth': width_mm,
+                        'tabsHeight': height_mm, 'tabsShape': 1 if shape == 'rectangle' else 0, 'tabsLayout': 1}
+            requested = {'lineEdit_tabs_width': width_mm, 'lineEdit_tabs_height': height_mm, 'lineEdit_nums': count}
+            if not all(result['invoked']) or any(abs(result['readback'].get(k, -1)-v) > 1e-6 for k,v in requested.items()):
+                raise RuntimeError('Native tab editor values did not match')
+            self.pending_tabs[operation_index] = {'native_operation_id': op['id'], 'expected': expected}
+            return {'verified': True, 'verification_scope': 'native editor values only',
+                    'expected_saved_tabs_after_generation': expected, 'operation_index': operation_index,
+                    'saved_verified': False, 'parameter_commit_stage': 'generate_studio_toolpath',
+                    'tab_positions_verified': False, 'machine_commands_sent': False, 'machining_ready': False}
 
     def generate_toolpath(self, operation_index: int) -> dict:
         with self.lock:
@@ -340,7 +381,12 @@ class NativeStudio:
             if operation_index >= len(live['paths']):
                 raise RuntimeError('Live operation order does not match saved operations')
             old_ids = [mesh['uuid'] for mesh in operation['toolpath_meshes']]
-            if not self._call('generate_path', operation_index)['queued']:
+            tab_pending = self.pending_tabs.get(operation_index)
+            if self.pending_tabs and not tab_pending:
+                raise RuntimeError('Another operation has uncommitted contour details')
+            if tab_pending and tab_pending['native_operation_id'] != operation.get('id'):
+                raise RuntimeError('Pending tabs belong to a different native operation')
+            if not self._call('calculate_contour_details' if tab_pending else 'generate_path', *([] if tab_pending else [operation_index]))['queued']:
                 raise RuntimeError('Native contour calculation invocation rejected')
             deadline = time.monotonic() + 30
             last = operation
@@ -359,9 +405,20 @@ class NativeStudio:
                     tool = last['tools'][0] if len(last['tools'])==1 else {}
                     tool_matches = not pending or all((tool.get(key)==value if isinstance(value,str)
                         else isinstance(tool.get(key),(int,float)) and abs(tool[key]-value)<1e-6) for key,value in pending.items())
-                    if last['calculation_evidence_verified'] and (not old_ids or ids != old_ids) and tool_matches:
+                    tabs_match = not tab_pending or all(isinstance((last.get('tab_settings') or {}).get(key), (int,float)) and abs(last['tab_settings'][key]-value)<1e-6 for key,value in tab_pending['expected'].items())
+                    if last['calculation_evidence_verified'] and ids != old_ids and tabs_match and tab_pending and not tool_matches:
+                        self.pending_tabs.pop(operation_index,None)
+                        return {'verified': False, 'outcome': 'tabs_saved_but_tool_parameters_need_reselection',
+                                'tab_settings_saved_verified': True, 'tab_positions_verified': False,
+                                'operation': last, 'expected_tool': pending,
+                                'required_action': 'Reselect the intended tool, regenerate from the path list, then verify saved parameters',
+                                'simulation_verified': False, 'machining_ready': False, 'machine_commands_sent': False}
+                    if last['calculation_evidence_verified'] and (not old_ids or ids != old_ids) and tool_matches and tabs_match:
                         self.pending_tools.pop(operation_index,None)
+                        self.pending_tabs.pop(operation_index,None)
                         return {'verified': True, 'operation': last, 'project_path': str(self.managed_project),
+                                'tab_settings_saved_verified': bool(tab_pending), 'tab_positions_verified': False,
+                                'requires_tool_reselection_after_detail_commit': bool(tab_pending),
                                 'verification': 'native state 1 + newly generated linked nonempty finite gcode_polyline vertex buffers in saved MKS',
                                 'simulation_verified': False, 'nc_export_verified': False, 'machining_ready': False,
                                 'machine_commands_sent': False}
@@ -400,6 +457,7 @@ class NativeStudio:
             if state.get("available") and expected in state["window_title"]:
                 self.managed_project = project
                 self.pending_tools = {}
+                self.pending_tabs = {}
                 return {"opened": True, "native_method": queued["method"], "path": str(project),
                         "state": state, "source": "native Qt slot + native property readback",
                         "existing_same_test_saved_before_reopen": same_project_saved}

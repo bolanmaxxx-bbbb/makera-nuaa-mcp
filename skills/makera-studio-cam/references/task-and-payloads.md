@@ -22,7 +22,7 @@ job.revision和服务task.revision分别记录。服务create总是从1开始，
 python <skill>/scripts/mcp_workflow.py audit --capabilities capabilities.json --tools tools.json
 ```
 
-assets/mcp-tool-map.json覆盖已验证版本的31个工具，按任务路由到对应参考资料。审核会指出新增但尚未接入的工具、未暴露工具，以及工具出现但能力声明不匹配的情况。服务版本只是线索：只调用当前工具列表和能力声明共同支持的动作。旧连接可继续其支持的只读检查；注册刀具、钻孔、区域清理等缺失功能先重连相应MCP服务，再重新核对。不要用新建独立进程的结果宣称当前聊天已重连。
+assets/mcp-tool-map.json覆盖已验证版本的32个工具，按任务路由到对应参考资料。审核会指出新增但尚未接入的工具、未暴露工具，以及工具出现但能力声明不匹配的情况。服务版本只是线索：只调用当前工具列表和能力声明共同支持的动作。旧连接可继续其支持的只读检查；注册刀具、钻孔、区域清理等缺失功能先重连相应MCP服务，再重新核对。不要用新建独立进程的结果宣称当前聊天已重连。
 
 ## 创建与配置工序分开
 
@@ -48,6 +48,9 @@ mode可选register或select_existing。register会增改指定组内同名刀具
 
 字段映射：diameter_mm→diameter，shank_mm→shank_diameter，flute_length_mm→flute_length；rpm→spindle_speed，feed_mm_min→feedrate，plunge_mm_min→plunge_feedrate，stepdown_mm→step_down，step_over_mm→step_over_mm。原生注册接口要求全部五项速率/策略数值，即使钻孔也不能省略或伪造横向步距；从实际计划/已确认刀库读取，不确定时说明接口缺项。该字段不证明实际啄钻退屑动作。
 
-当前只验证了平底铣刀和钻头的录入，刃数、钻尖角、刀肩/伸出等不能假称已经写入。create调用的切深受当前开发适配器限制：不大于毛坯厚度和10 mm；不能靠任务的through_cut_allowance绕过这个限制。
+当前只验证了平底铣刀和钻头的录入，刃数、钻尖角、刀肩/伸出等不能假称已经写入。create调用仍限于毛坯厚度和10mm。v0.5后续深度编辑可显式传through_cut_allowance_mm（0～2mm），结束深度不超过毛坯厚度加许可量且不超过10mm；未知垫板许可量不能默填。
 
 配置输出分成calls与after_verification：先执行注册/选刀，逐条检查verified，再把select返回expected_saved_tool_after_generation与本job的参数比较；一致后才能调用generate。生成后验证新运动网格、保存参数、钻孔退屑及源模型哈希。helper拒绝旧revision、过期快照、错误几何/index、缺少步距及当前连接缺失的工具；这仍是记录一致性检查，原生适配器会再次校验实际应用状态。
+
+
+工序可提供tabs={count,width_mm,height_mm,shape}。helper在选刀检查后的after_verification中先输出configure_studio_contour_tabs，再输出generate；这不是无需检查的批处理。详细页提交后须回读，并根据返回要求重新选刀、从列表重算，核对保存的刀具参数。原生支撑位置与留存运动另行检查。through_cut_allowance_mm按工序传递，先创建毛坯内占位区间，刷新快照后再编辑至允许区间；不能用全局名义余量替代实际依据。

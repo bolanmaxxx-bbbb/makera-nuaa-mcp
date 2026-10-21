@@ -2,7 +2,7 @@
 
 让 Codex 通过 MCP 直接调用 Makera Studio，逐步规划、生成并核对 CAM 结果。附带可复用的 `makera-studio-cam` 技能，支持引导推荐、可修改模板和自定义工艺流程。摄像头采样是辅助观测能力。
 
-当前版本 **0.4.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
+当前版本 **0.5.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
 
 ```text
 Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
@@ -54,13 +54,36 @@ codex mcp add makera-studio --env PYTHONIOENCODING=utf-8 -- $projectPython -m ma
 
 ## 安装工艺向导技能
 
-技能位于 `skills/makera-studio-cam/`。将整个文件夹安装到实际的 Codex skills 目录（默认是用户目录下的 `.codex/skills/`）；已有同名技能时先比较版本。
+技能位于 `skills/makera-studio-cam/`。可请 `$skill-installer` 从本仓库安装此目录，或将整个文件夹放入目标 Codex 实际识别的技能目录；已有同名技能时先比较版本。目录位置以目标版本和本机配置为准，参见[Codex技能文档](https://learn.chatgpt.com/docs/build-skills)，不要直接沿用作者电脑的路径。
 
 可显式调用 `$makera-studio-cam`，也可由 Makera 加工需求匹配。入口包括：
 
 - **引导推荐**：补齐目标和限制，比较少量可选方案。
 - **选择模板**：从雕刻、孔、型腔、板件、三维表面、多装夹等起点修改。
 - **自定义流程**：沿用使用者的工序，检查目标覆盖、依赖、定位及交接验收。
+
+第一次安装时，可以直接向本机 Codex 发送：
+
+```text
+请阅读 https://github.com/bolanmaxxx-bbbb/makera-nuaa-mcp 的README，
+安装 skills/makera-studio-cam 技能及配套MCP服务。
+根据我的实际环境配置路径，核对Studio版本兼容性；不要套用作者的本地路径或设备地址。
+调用get_capabilities核对实际版本和工具，完成一次只读连接检查，不启动机床加工。
+```
+
+安装完成后使用：
+
+```text
+$makera-studio-cam
+请通过Makera Studio MCP准备这个加工项目。
+模型或尺寸：[填写或附文件]
+材料与毛坯实测尺寸：[填写]
+刀具、装夹和垫板：[填写]
+精度及检验要求：[填写]
+先检查工艺顺序、定位和零件保留分离方式，缺项每次问最关键的1～3项。
+在已授权的软件范围内推进到刀路生成、保存和回读核对；说明具体能力缺口。
+不使用Computer Use，工程使用简洁中文名，现场运动和切削另行授权。
+```
 
 模板可以增删、重排、拆分工序；测厚/定厚仅为按需选择的模块。工艺菜单是规划选项，不表示对应 MCP 操作都已实现。
 
@@ -73,7 +96,7 @@ codex mcp add makera-studio --env PYTHONIOENCODING=utf-8 -- $projectPython -m ma
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
-技能已为当前31个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+技能已为当前32个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
 
 ## 软件验证流程
 
@@ -103,3 +126,10 @@ $env:PYTHONIOENCODING = 'utf-8'
 `scripts/validate_planar_mcp.py`接受使用者自己的几何MKS和SVG UUID，创建全新副本验证区域清理及深度增减。输入项目须仅含几何，当前Studio须已保存且没有提示窗；脚本拒绝覆盖已有测试文件。输出报告保留在被Git忽略的runtime目录。
 
 接口参考：[Qt QMetaObject](https://doc.qt.io/archives/qt-5.15/qmetaobject.html)、[Frida JavaScript API](https://frida.re/docs/javascript-api/)。
+
+
+### v0.5：连接筋与显式超深
+
+新增configure_studio_contour_tabs：在2D轮廓详情中设置自动支撑的数量、宽度、高度与形状，编辑器回读后通过generate_studio_toolpath计算保存。保存参数与支撑点分别报告；不宣称强度或实际留存已经验证。详情提交后须重新选刀并重算，避免原生详情页改写工具字段。
+
+set_studio_operation_depths新增through_cut_allowance_mm（默认0，范围0～2mm）；仅显式声明时才允许结束深度超出毛坯底面，并仍限制在10mm内。必须自行核对实际钻尖、参考面和垫板许可量；此接口不会建立现场基准或发送运动。

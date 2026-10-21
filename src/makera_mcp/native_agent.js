@@ -26,6 +26,7 @@ const enabled=fn(widgets,'?isEnabled@QWidget@@','bool',['pointer']);
 const spinValue=fn(widgets,'?value@QDoubleSpinBox@@','double',['pointer']);
 const spinMin=fn(widgets,'?minimum@QDoubleSpinBox@@','double',['pointer']);
 const spinMax=fn(widgets,'?maximum@QDoubleSpinBox@@','double',['pointer']);
+const spinDecimals=fn(widgets,'?decimals@QDoubleSpinBox@@','int',['pointer']);
 const labelText=fn(widgets,'?text@QLabel@@','pointer',['pointer','pointer']);
 const lineText=fn(widgets,'?text@QLineEdit@@','pointer',['pointer','pointer']);
 const comboText=fn(widgets,'?currentText@QComboBox@@','pointer',['pointer','pointer']);
@@ -162,7 +163,7 @@ function methodsOf(object) {
   }
   return result;
 }
-function treeOf(root,maxDepth=20) {
+function treeOf(root,maxDepth=30) {
   const result=[];
   function visit(object,parentPath,depth) {
     if(depth>maxDepth || result.length>=8000)return;
@@ -185,6 +186,43 @@ function nameOf(object) {
   try {return readQString(result);} finally {destroyQString(result);}
 }
 rpc.exports = {
+  configureContourTabs(hwnd,count,width,height,shape){return onGui(hwnd,()=>{
+    if(!activeModal().isNull()||!Number.isInteger(count)||count<1||count>100||![width,height].every(x=>Number.isFinite(x)&&x>0&&x<=10)||!['rectangle','triangle'].includes(shape))throw new Error('Invalid automatic tab settings or active dialog');
+    const editors=treeOf(rootOf(hwnd)).filter(o=>o.type==='Contour2DPathWgt'&&visible(ptr(o.pointer)));
+    if(editors.length!==1)throw new Error('Expected one visible 2D contour detail editor');
+    const editor=ptr(editors[0].pointer),objects=treeOf(editor);
+    const find=name=>{const matches=objects.filter(o=>o.name===name);if(matches.length!==1)throw new Error('Missing tab field '+name);return ptr(matches[0].pointer);};
+    const fields={lineEdit_tabs_width:width,lineEdit_tabs_height:height,lineEdit_nums:count},targets=[];
+    for(const [name,value] of Object.entries(fields)){
+      const wrapper=find(name),spins=childObjects(wrapper).filter(p=>isA(p,'QDoubleSpinBox'));
+      if(spins.length!==1||value<spinMin(spins[0])||value>spinMax(spins[0]))throw new Error('Tab parameter outside native field range: '+name);
+      const scale=10**spinDecimals(spins[0]);
+      if(Math.abs(value*scale-Math.round(value*scale))>1e-6)throw new Error('Tab parameter is not representable at native field precision: '+name);
+      targets.push({name,wrapper,spin:spins[0],value});
+    }
+    const shapeBox=find('comboBox_tabs_shape');
+    if(!isA(shapeBox,'QComboBox')||comboCount(shapeBox)!==2)throw new Error('Unexpected support shape selector');
+    const results=[queueMethod(find('radioButton_default'),'setChecked',[{type:'bool',value:true}],1),queueMethod(editor,'on_radioButton_default_released',[],1)];
+    if(getText(find('comboBox_tab'),comboText)!=='数量')throw new Error('Only automatic count-based support layout is verified');
+    results.push(queueMethod(shapeBox,'setCurrentIndex',[{type:'int',value:shape==='rectangle'?1:0}],1));
+    for(const target of targets){
+      results.push(queueMethod(target.spin,'setValue',[{type:'double',value:target.value}],1));
+      results.push(queueMethod(target.wrapper,'editingFinished',[],1));
+    }
+    results.push(queueMethod(editor,'on_lineEdit_tabs_width_editingFinished',[],1));
+    results.push(queueMethod(editor,'on_pushButton_add_tab_clicked',[],1));
+    return {invoked:results,readback:Object.fromEntries(targets.map(t=>[t.name,spinValue(t.spin)])),shape:getText(shapeBox,comboText)};
+  });},
+  calculateContourDetails(hwnd){return onGui(hwnd,()=>{
+    const editors=treeOf(rootOf(hwnd)).filter(o=>o.type==='Contour2DPathWgt'&&visible(ptr(o.pointer)));
+    if(editors.length!==1||!activeModal().isNull())throw new Error('Expected visible contour detail page');
+    return {queued:queueMethod(ptr(editors[0].pointer),'on_btnMainCalculate_released',[],2)};
+  });},
+  openOperationDetails(hwnd,index){return onGui(hwnd,()=>{
+    const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
+    if(!Number.isInteger(index)||index<0||index>=paths.length||!activeModal().isNull())throw new Error('Operation unavailable or dialog active');
+    return {queued:queueMethod(ptr(paths[index].pointer),'on_btnImgShowDetail_clicked',[],1)};
+  });},
   saveBeforeReopeningSameTest(hwnd,stem){return onGui(hwnd,()=>{
     const root=rootOf(hwnd),modal=activeModal();
     if(getText(root,titleText)!=='MakeraStudio-['+stem+']'||modal.isNull()||classOf(modal)!=='MyMessageBox')throw new Error('Unexpected project save dialog');
@@ -343,6 +381,8 @@ rpc.exports = {
       if(matches.length!==1||!isA(ptr(matches[0].pointer),'QDoubleSpinBox'))throw new Error('Expected one planar depth field');
       const object=ptr(matches[0].pointer),value=field==='Start'?startDepth:endDepth;
       if(value<spinMin(object)||value>spinMax(object)||(field==='Start'&&spinMin(object)>0))throw new Error('Depth outside native field range');
+      const scale=10**spinDecimals(object);
+      if(Math.abs(value*scale-Math.round(value*scale))>1e-6)throw new Error('Depth is not representable at the native field precision; choose and validate a rounded depth explicitly');
       targets[field]=object;
     }
     const results=[];

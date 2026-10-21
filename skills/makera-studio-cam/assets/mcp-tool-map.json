@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "validated_server_version": "0.4.0",
+  "validated_server_version": "0.5.0",
   "tools": [
     {"name":"get_capabilities","route":"discovery","reference":"references/mcp-execution.md","requires":[]},
     {"name":"connect_studio","route":"project","reference":"references/mcp-execution.md","requires":["native_studio_connection"]},
@@ -12,6 +12,7 @@
     {"name":"create_2d_drilling","route":"cam","reference":"references/mcp-execution.md","requires":["native_2d_drilling_and_verified_peck_retraction_sequence"]},
     {"name":"create_2d_pocket","route":"cam","reference":"references/mcp-execution.md","requires":["native_pocket_calculation_and_verification"]},
     {"name":"set_studio_operation_depths","route":"cam","reference":"references/mcp-execution.md","requires":["native_planar_start_end_depth_commit"]},
+    {"name":"configure_studio_contour_tabs","route":"cam","reference":"references/mcp-execution.md","requires":["native_contour_tabs_editor_and_saved_parameters"]},
     {"name":"generate_studio_toolpath","route":"cam","reference":"references/mcp-execution.md","requires":["native_2d_contour_calculation_and_saved_vertex_verification"]},
     {"name":"register_studio_tool","route":"cam","reference":"references/mcp-execution.md","requires":["native_tool_geometry_and_material_parameter_registration"]},
     {"name":"select_studio_tool","route":"cam","reference":"references/mcp-execution.md","requires":["native_editor_tool_selection_and_generation_commit"]},

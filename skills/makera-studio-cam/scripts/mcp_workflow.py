@@ -110,7 +110,12 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     if not isinstance(start, (int, float)) or isinstance(start, bool) or not math.isfinite(start) or not 0 <= start < depth:
         raise ValueError("Expected a finite 0 <= start_depth_mm < depth_mm")
     height = snapshot.get("stock", {}).get("height")
-    if not isinstance(height, (int, float)) or isinstance(height, bool) or not math.isfinite(height) or depth > min(10, height):
+    allowance = op.get("through_cut_allowance_mm", 0)
+    if not isinstance(allowance, (int,float)) or isinstance(allowance,bool) or not math.isfinite(allowance) or not 0 <= allowance <= 2:
+        raise ValueError("Explicit through_cut_allowance_mm must be between 0 and 2 mm")
+    if allowance and "native_explicit_through_cut_allowance" not in capabilities.get("supported", []):
+        raise ValueError("Current connection does not support explicit through-cut allowance")
+    if not isinstance(height, (int, float)) or isinstance(height, bool) or not math.isfinite(height) or depth > min(10, height + allowance):
         raise ValueError("Depth exceeds the native development adapter's stock/10 mm limit")
     calls = []
 
@@ -122,7 +127,7 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     index = binding.get("operation_index")
     if index is None:
         call({"contour": "create_2d_contour", "drill": "create_2d_drilling", "pocket": "create_2d_pocket"}[op["kind"]],
-             {"geometry_uuids": geometry, "end_depth_mm": depth})
+             {"geometry_uuids": geometry, "end_depth_mm": min(depth, height)})
         call("get_studio_operations", {})
         return {"ready": True, "phase": "create_only", "calls": calls,
                 "next": "Record the returned operation_index and refresh project_snapshot before configuring"}
@@ -135,7 +140,10 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         raise ValueError("Saved native operation does not match the planned type/geometry")
     interval = saved.get("depth") or {}
     if abs(interval.get("startDepth", -1) - start) > 0.000001 or abs(interval.get("endDepth", -1) - depth) > 0.000001:
-        call("set_studio_operation_depths", {"operation_index": index, "start_depth_mm": start, "end_depth_mm": depth})
+        arguments = {"operation_index": index, "start_depth_mm": start, "end_depth_mm": depth}
+        if allowance:
+            arguments["through_cut_allowance_mm"] = allowance
+        call("set_studio_operation_depths", arguments)
         call("get_studio_operations", {})
         return {"ready": True, "phase": "depth_only", "calls": calls,
                 "next": "Check committed depth and invalidation; refresh snapshot before configuring/generating"}
@@ -168,10 +176,21 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     call("select_studio_tool", {"operation_index": index, "group": native["group"],
          "name": native["name"], "material_profile": native["material_profile"]})
     # Selection is a checkpoint: compare expected_saved_tool_after_generation with the job first.
-    return {"ready": True, "phase": "configure_only", "calls": calls,
-            "after_verification": [{"tool": "generate_studio_toolpath", "arguments": {"operation_index": index}},
+    after = []
+    tabs = op.get("tabs")
+    if tabs:
+        if op["kind"] != "contour" or not catalog["tools"]["configure_studio_contour_tabs"]["available"]:
+            raise ValueError("Contour tabs unavailable in current connection")
+        count,width,tab_height,shape = (tabs.get(k) for k in ("count","width_mm","height_mm","shape"))
+        if isinstance(count,bool) or not isinstance(count,int) or not 1 <= count <= 100 or shape not in ("rectangle","triangle") or any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not 0 < v <= 10 for v in (width,tab_height)) or tab_height >= depth-start:
+            raise ValueError("Explicit count/width/height/shape and valid tab height required")
+        after.append({"tool":"configure_studio_contour_tabs","arguments":{"operation_index":index,"count":count,"width_mm":width,"height_mm":tab_height,"shape":shape}})
+    after.extend([{"tool": "generate_studio_toolpath", "arguments": {"operation_index": index}},
                                    {"tool": "save_studio_project", "arguments": {}},
-                                   {"tool": "get_studio_operations", "arguments": {}}],
+                                   {"tool": "get_studio_operations", "arguments": {}}])
+    return {"ready": True, "phase": "configure_only", "calls": calls,
+            "after_verification": after,
+            "tabs_require_post_commit_tool_reselection": bool(tabs),
             "next": "Compare selected expected parameters with this job before generating; inspect every result"}
 
 

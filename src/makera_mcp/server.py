@@ -83,6 +83,7 @@ def build_server(settings: Settings | None = None):
                               "native_tool_geometry_and_material_parameter_registration", "native_editor_tool_selection_and_generation_commit",
                               "native_2d_drilling_and_verified_peck_retraction_sequence",
                               "native_pocket_calculation_and_verification", "native_planar_start_end_depth_commit",
+                              "native_contour_tabs_editor_and_saved_parameters", "native_explicit_through_cut_allowance",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
@@ -135,9 +136,14 @@ def build_server(settings: Settings | None = None):
         return await anyio.to_thread.run_sync(studio.create_pocket, geometry_uuids, end_depth_mm)
 
     @server.tool(annotations=local_write)
-    async def set_studio_operation_depths(operation_index: int, start_depth_mm: float, end_depth_mm: float) -> dict:
-        """Set and commit 0 <= start < end <= min(stock height, 10 mm) for native pocket/contour/drilling. Save and read back; requires recalculation. No origin change or machine motion."""
-        return await anyio.to_thread.run_sync(studio.set_operation_depths, operation_index, start_depth_mm, end_depth_mm)
+    async def set_studio_operation_depths(operation_index: int, start_depth_mm: float, end_depth_mm: float, through_cut_allowance_mm: float = 0) -> dict:
+        """Commit 0 <= start < end <= 10 mm. Depth beyond stock requires an explicit 0..2 mm backing allowance; zero remains the default. Requires recalculation and does not change origin or move hardware."""
+        return await anyio.to_thread.run_sync(studio.set_operation_depths, operation_index, start_depth_mm, end_depth_mm, through_cut_allowance_mm)
+
+    @server.tool(annotations=local_write)
+    async def configure_studio_contour_tabs(operation_index: int, count: int, width_mm: float, height_mm: float, shape: str = "rectangle") -> dict:
+        """Stage automatic count-based tabs in the native 2D contour detail editor. Read back values; generate_studio_toolpath commits and verifies saved settings. Does not prove tab placement/strength or authorize cutting."""
+        return await anyio.to_thread.run_sync(studio.configure_contour_tabs, operation_index, count, width_mm, height_mm, shape)
 
     @server.tool(annotations=local_write)
     async def generate_studio_toolpath(operation_index: int) -> dict:

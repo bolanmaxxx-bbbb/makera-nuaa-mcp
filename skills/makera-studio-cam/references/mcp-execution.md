@@ -6,9 +6,9 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.4.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.5.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整31工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整32工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 
@@ -20,7 +20,7 @@
 | 选刀 | select_studio_tool | 编辑器匹配；工具参数在生成时提交，尚不代表已保存 |
 | 创建轮廓/钻孔 | create_2d_contour / create_2d_drilling | 几何UUID、区域尺寸、切深、工序类型匹配 |
 | 创建平面区域清理 | create_2d_pocket | 原生type=0；起始0、指定结束深度、SVG选区及默认平底刀需回读；不能冒充完整面铣定厚 |
-| 修改平面起止深度 | set_studio_operation_depths | 支持type0/1/2，0≤start<end≤min(10,毛坯厚度)，保存回读后必须重新计算 |
+| 修改平面起止深度 | set_studio_operation_depths | 支持type0/1/2，默认0≤start<end≤min(10,毛坯厚度)，显式垫板余量可扩展结束深度，保存回读后必须重新计算 |
 | 生成并提交 | generate_studio_toolpath | verified=true；本修订的实际刀具参数、非空运动路径及保存文件核对 |
 | 读取工序证据 | get_studio_operations | 比较live与saved，不能互相代替 |
 | 只读MKS检查 | inspect_studio_project(path) | 实际文件哈希、毛坯、SVG UUID/局部顶点范围、工序及计算证据；不能证明已连接设备 |
@@ -57,3 +57,16 @@
 ```
 
 该示例只说明结构，不是本任务的实际证据。布尔值必须来自具体读回/检查记录，并在任务档案中保留证据文件路径。仿真不可用时保持false；若用户仅要软件项目可交付当前阶段，但不得标为正式加工已验收。
+
+
+## 连接筋与板底补偿（v0.5）
+
+`configure_studio_contour_tabs(operation_index, count, width_mm, height_mm, shape)`只支持2D轮廓、自动按数量布局；shape为rectangle或triangle。返回值只证明编辑器数值，尚未保存。随后`generate_studio_toolpath`从详细参数页计算并保存，比较tab_settings与expected_saved_tabs_after_generation。修改后的支撑点和有序刀路仍须另行核对；开关、数量或显示模型不能证明连接筋位置、留存厚度或强度正确。
+
+刀径接近或超过零件特征尺寸时，还须按实际刀具扫掠检查连接筋附近的保留范围；设定宽度不一定等于最终残留宽度，不能仅凭参数表认定零件易于分离。
+
+原生详细页计算可能改写工具字段。返回`requires_tool_reselection_after_detail_commit=true`或`tabs_saved_but_tool_parameters_need_reselection`时，回读后重新select_studio_tool，再从列表generate并比较实际刀径、刃长、转速、进给、层深和步距。不能把连接筋设置成功当作工具参数已验收。不对第二次重算盲目重复，先检查现存工序与结果。
+
+`set_studio_operation_depths`新增可选`through_cut_allowance_mm`，默认0，显式值限制在0～2mm，end仍不得超过10mm或毛坯厚度加该余量。创建工序仍先在毛坯内建立，再调用此工具设置所需区间。余量是允许写入的界限，不会自动增加实际切深，也不表示现场已允许钻入垫板；使用实际钻尖几何、贯穿量和用户确认的垫板许可量建立依据。该参数不改变Z基准或触发运动。
+
+原生数值框可能限制小数位；无法精确表达的深度或连接筋尺寸会在写入前被拒绝，不默默四舍五入。调用方须明确选择可表达的值，再重新核对贯穿量和许可上限。
