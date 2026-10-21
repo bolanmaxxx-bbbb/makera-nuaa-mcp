@@ -141,6 +141,9 @@ def inspect_project(path: str) -> dict:
                     'id': native_path.get('id'), 'name': native_path.get('pathName'), 'type': native_path.get('type'),
                     'native_state': native_path.get('emPathState'), 'geometry_uuids': native_path.get('selectedmeshes', []),
                     'depth': native_path.get('depth'), 'tools': native_path.get('tools', []),
+                    'relief_settings': ({key:native_path.get(key) for key in
+                        ('finishing','machining_allowance','bounding','bound_offset','pocket_strategy','parallel_angle','path_direction','toolcontainment','safe')}
+                        if native_path.get('type') == 6 else None),
                     'tab_settings': native_path.get('tab'),
                     'support_tab_list': native_path.get('support_tab_list', []),
                     'support_mesh_ids': native_path.get('supportmeshesuuid', []),

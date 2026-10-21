@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "validated_server_version": "0.7.0",
+  "validated_server_version": "0.8.0",
   "tools": [
     {"name":"get_capabilities","route":"discovery","reference":"references/mcp-execution.md","requires":[]},
     {"name":"connect_studio","route":"project","reference":"references/mcp-execution.md","requires":["native_studio_connection"]},
@@ -37,6 +37,9 @@
     {"name":"set_task_context","route":"evidence","reference":"references/observation-and-nc.md","requires":["task_context"]},
     {"name":"list_visual_events","route":"evidence","reference":"references/observation-and-nc.md","requires":[]},
     {"name":"export_event_evidence","route":"evidence","reference":"references/observation-and-nc.md","requires":["local_evidence_export"]},
-    {"name":"inspect_nc_file","route":"nc","reference":"references/observation-and-nc.md","requires":["lexical_nc_inspection"]}
+    {"name":"inspect_nc_file","route":"nc","reference":"references/observation-and-nc.md","requires":["lexical_nc_inspection"]},
+    {"name":"get_studio_operation_catalog","requires":["native_operation_catalog_classification"],"route":"operation_classification","reference":"references/operation-types.md"},
+    {"name":"create_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_creation","reference":"references/operation-types.md"},
+    {"name":"configure_studio_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_configuration","reference":"references/operation-types.md"}
   ]
 }

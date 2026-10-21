@@ -50,6 +50,7 @@ const listItemText=fn(widgets,'?text@QListWidgetItem@@','pointer',['pointer','po
 const listSetCurrent=fn(widgets,'?setCurrentRow@QListWidget@@QEAAXH@Z','void',['pointer','int']);
 const titleText=fn(widgets,'?windowTitle@QWidget@@','pointer',['pointer','pointer']);
 const buttonText=fn(widgets,'?text@QAbstractButton@@','pointer',['pointer','pointer']);
+const buttonChecked=fn(widgets,'?isChecked@QAbstractButton@@','bool',['pointer']);
 const activeModal=fn(widgets,'?activeModalWidget@QApplication@@','pointer',[]);
 const stringFromUtf8=fn(core,'?fromUtf8@QString@@SA?AV1@PEBDH@Z','pointer',['pointer','pointer','int']);
 const fileDialogSelect=fn(widgets,'?selectFile@QFileDialog@@','void',['pointer','pointer']);
@@ -526,6 +527,27 @@ rpc.exports = {
       queueMethod(path,'on_dspbEndDepth_editingFinished',[],1)];
     return {invoked:results,geometry_uuids:uuids,end_depth_mm:endDepth};
   });},
+  configureRelief(hwnd,index,uuid,layered,allowance){return onGui(hwnd,()=>{
+    if(!Number.isInteger(index)||index<0||typeof uuid!=='string'||!/^[A-Za-z0-9-]{36}$/.test(uuid)||typeof layered!=='boolean'||!Number.isFinite(allowance)||allowance<0||allowance>2||!activeModal().isNull())throw new Error('Invalid 3D relief settings');
+    const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
+    if(index>=paths.length)throw new Error('Path index not found');
+    const path=ptr(paths[index].pointer),objects=treeOf(path);
+    const one=name=>{const found=objects.filter(o=>o.name===name&&visible(ptr(o.pointer)));if(found.length!==1)throw new Error('Expected relief editor field '+name);return ptr(found[0].pointer);};
+    const wrapper=one('relief3D_machin_allowance'),box=one('chkSwitch_Relief3DStepDown'),choice=one('wgtChooseObj');
+    const spins=childObjects(wrapper).filter(p=>isA(p,'QDoubleSpinBox'));
+    if(spins.length!==1||allowance<spinMin(spins[0])||allowance>spinMax(spins[0])||Math.abs(allowance*10**spinDecimals(spins[0])-Math.round(allowance*10**spinDecimals(spins[0])))>1e-6)throw new Error('Allowance outside native range/precision');
+    const invoked=[queueMethod(choice,'sltChooseDlgFinished',[{type:'std::vector<std::string>',value:[uuid]},{type:'int',value:1}],1),
+      queueMethod(box,'setChecked',[{type:'bool',value:layered}],1),
+      queueMethod(path,'on_chkSwitch_Relief3DStepDown_toggled',[{type:'bool',value:layered}],1),
+      queueMethod(spins[0],'setValue',[{type:'double',value:allowance}],1),
+      queueMethod(path,'on_relief3D_machin_allowance_editingFinished',[],1)];
+    return {invoked,layered:buttonChecked(box),allowance_mm:spinValue(spins[0])};
+  });},
+  closeReliefDetails(hwnd){return onGui(hwnd,()=>{
+    const found=treeOf(rootOf(hwnd)).filter(o=>o.type==='ReliefPathWgt'&&visible(ptr(o.pointer)));
+    if(found.length!==1||!activeModal().isNull())throw new Error('Expected visible relief details');
+    return {queued:queueMethod(ptr(found[0].pointer),'on_pushButton_cancel_clicked')};
+  });},
   setOperationDepths(hwnd,index,startDepth,endDepth){return onGui(hwnd,()=>{
     if(!Number.isInteger(index)||index<0||!Number.isFinite(startDepth)||!Number.isFinite(endDepth)||startDepth<0||endDepth<=startDepth||endDepth>10)throw new Error('Invalid planar depth interval');
     const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
@@ -561,7 +583,7 @@ rpc.exports = {
   windowIdentity(hwnd){const object=findWidget(ptr(hwnd));return object.isNull()?null:{name:nameOf(object),type:classOf(object)};},
   showStudio(hwnd){return {queued:queueMethod(rootOf(hwnd),'show')};},
   choosePathType(hwnd,label){return onGui(hwnd,()=>{
-    if(!['2D轮廓','2D区域清理','2D钻孔'].includes(label))throw new Error('Unsupported CAM operation');
+    if(!['2D轮廓','2D区域清理','2D钻孔','2D螺纹','2D倒角','3D浮雕','3D特征加工','3D轮廓','3D钻孔','3D倒角','3D螺纹','旋转雕刻','激光图片','激光矢量'].includes(label))throw new Error('Unsupported CAM operation');
     const modal=activeModal();if(modal.isNull()||classOf(modal)!=='AddKnifeTypeDlg')throw new Error('Expected path type chooser');
     const labels=treeOf(modal).filter(o=>isA(ptr(o.pointer),'QLabel')&&getText(ptr(o.pointer),labelText)===label);
     if(labels.length!==1)throw new Error('Expected exact operation label');
@@ -569,11 +591,34 @@ rpc.exports = {
     if(buttons.length!==1)throw new Error('Expected operation action');
     return {queued:queueMethod(buttons[0],'click'),operation:label};
   });},
-  openPathChooser(hwnd){
+  showPathList(hwnd){return onGui(hwnd,()=>{
+    const root=rootOf(hwnd);
+    if(!activeModal().isNull())throw new Error('Resolve active dialog before opening path chooser');
+    const objects=treeOf(root),next=objects.filter(o=>o.name==='btnMainCusNext'&&visible(ptr(o.pointer))&&enabled(ptr(o.pointer)));
+    if(next.length===1){
+      const areas=objects.filter(o=>o.type==='CutterPathDesignArea');
+      if(areas.length!==1||getText(ptr(next[0].pointer),buttonText)!=='下一步')throw new Error('Unknown model preparation stage');
+      if(!queueMethod(ptr(areas[0].pointer),'on_btnMainCusNext_clicked',[],1))throw new Error('Cannot advance model preparation to path list');
+    }
+    const matches=treeOf(root).filter(o=>o.type==='KnifePathControl'&&o.name==='PathListWidget'&&visible(ptr(o.pointer)));
+    return {visible:matches.length===1};
+  });},
+  openPathChooser(hwnd){return onGui(hwnd,()=>{
+    if(!activeModal().isNull())throw new Error('Resolve active dialog before opening path chooser');
     const matches=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathControl'&&o.name==='PathListWidget');
     if(matches.length!==1)throw new Error('Expected one path controller');
     return {queued:queueMethod(ptr(matches[0].pointer),'on_btnTxtAddPath_clicked')};
-  },
+  });},
+  cancelPathChooser(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();
+    if(modal.isNull()||classOf(modal)!=='AddKnifeTypeDlg')throw new Error('Expected path type chooser');
+    return {queued:queueMethod(modal,'on_btnMainCancel_clicked')};
+  });},
+  pathTypeOptions(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();
+    if(modal.isNull()||classOf(modal)!=='AddKnifeTypeDlg')throw new Error('Expected path type chooser');
+    return treeOf(modal).filter(o=>o.name==='WizardLabel'&&isA(ptr(o.pointer),'QLabel')).map(o=>getText(ptr(o.pointer),labelText));
+  });},
   camPanel(hwnd){return onGui(hwnd,()=>{
     const modal=activeModal(),root=modal.isNull()?rootOf(hwnd):modal;
     return {modal:!modal.isNull(),root:classOf(root),items:treeOf(root).filter(o=>isA(ptr(o.pointer),'QWidget')&&visible(ptr(o.pointer))).map(o=>{
@@ -585,7 +630,7 @@ rpc.exports = {
       else if(isA(p,'QLineEdit'))value=getText(p,lineText);
       let options;
       if(isA(p,'QComboBox')){options=[];for(let i=0;i<comboCount(p);i++){const s=Memory.alloc(8);comboItemText(p,s,i);try{options.push(readQString(s));}finally{destroyQString(s);}}}
-      return {...o,value,options,enabled:enabled(p),methods:methodsOf(p)};
+      return {...o,value,options,checked:isA(p,'QCheckBox')?buttonChecked(p):undefined,enabled:enabled(p),methods:methodsOf(p)};
     })};
   });},
   identity(){return {executable:Process.getModuleByName('MakeraStudio.exe').path,architecture:Process.arch,qt_core:core.path,backend:'native_qt'};},

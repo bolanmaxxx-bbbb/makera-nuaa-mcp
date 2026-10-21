@@ -48,7 +48,7 @@ def build_server(settings: Settings | None = None):
     server = FastMCP(
         "Makera Studio Task Assistant", lifespan=lifespan,
         instructions=("Primary objective: complete the user's Studio CAM task, from inputs through toolpaths, simulation and NC delivery. "
-                      "Use the standalone native Qt bridge for managed project import, stock configuration and verified planar CAM. "
+                      "Use the standalone native Qt bridge for managed project import, stock configuration and verified planar/model-relief CAM. "
                       "Read get_capabilities first; simulation and NC export are not yet implemented. "
                       "No Computer Use, screenshots, accessibility, mouse or keyboard injection is required. "
                       "Only isolated projects under cases/ may be modified in this development release. "
@@ -88,14 +88,19 @@ def build_server(settings: Settings | None = None):
                               "native_model_import_stl_svg_with_saved_geometry", "native_stock_catalog_readback",
                               "native_stock_shape_material_dimensions_saved",
                               "native_single_model_placement_saved_matrix_verification",
+                              "native_operation_catalog_classification", "native_3d_relief_calculation_and_verification",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
                 "not_implemented": ["other_model_import_formats", "multi_model_and_general_transform_commit", "native_project_creation_save_as",
                                     "tool_group_creation", "other_tool_geometry_fields", "operation_reorder_copy_delete",
                                     "full_facing_to_thickness_workflow", "fixture_clearance_verification",
-                                    "task_stage_completion_commit", "remaining_operation_types", "simulation_result_verification", "nc_postprocessing_verification",
+                                    "task_stage_completion_commit", "2d_thread_and_chamfer_calculation",
+                                    "3d_feature_contour_hole_edge_selection_and_calculation", "rotary_and_laser_calculation",
+                                    "simulation_result_verification", "nc_postprocessing_verification",
                                     "direct_controller_telemetry", "machine_motion", "automatic_anomaly_classification"],
+                "operation_catalog_tool": "get_studio_operation_catalog",
+                "native_3d_relief_scope": {"single_model_single_mesh": True, "stock_shape": "box", "max_stock_thickness_mm": 10, "verified_tools": ["flat_endmill"]},
                 "studio_state": "Reads Qt object properties independently through a persistent native bridge; no expired UI snapshot dependency",
                 "integration_status": "Unofficial internal Qt adapter; executable fingerprint pinned; not a Makera public SDK",
                 "storage": {"directory": str(store.path), "max_disk_mb": settings.max_disk_mb,
@@ -168,13 +173,28 @@ def build_server(settings: Settings | None = None):
         return await anyio.to_thread.run_sync(studio.set_operation_depths, operation_index, start_depth_mm, end_depth_mm, through_cut_allowance_mm)
 
     @server.tool(annotations=local_write)
+    async def create_3d_relief(model_uuid: str, layered: bool, allowance_mm: float, project_sha256: str) -> dict:
+        """Create/save native 3D relief on one verified model mesh inside rectangular stock <=10mm thick. Explicit layering and depth allowance; requires fresh saved project SHA. Select/verify a flat tool before generation. Not 3D feature, edge, rotary, simulation or machine execution."""
+        return await anyio.to_thread.run_sync(studio.create_relief, model_uuid, layered, allowance_mm, project_sha256)
+
+    @server.tool(annotations=readonly)
+    async def get_studio_operation_catalog() -> dict:
+        """Read all native chooser labels and classify 2D/3D/rotary/laser types, required geometry/tools, test cases and verified MCP scope. Opens/closes its own chooser without adding paths or saving. An open managed project and no active modal are required; catalog presence is not execution support."""
+        return await anyio.to_thread.run_sync(studio.operation_catalog)
+
+    @server.tool(annotations=local_write)
+    async def configure_studio_3d_relief(operation_index: int, layered: bool, allowance_mm: float, project_sha256: str) -> dict:
+        """Save native relief layering/depth allowance on its existing model selection; fresh SHA required. Regenerate and inspect new motion buffers afterwards. Does not imply machining validation."""
+        return await anyio.to_thread.run_sync(studio.configure_relief, operation_index, layered, allowance_mm, project_sha256)
+
+    @server.tool(annotations=local_write)
     async def configure_studio_contour_tabs(operation_index: int, count: int, width_mm: float, height_mm: float, shape: str = "rectangle") -> dict:
         """Stage automatic count-based tabs in the native 2D contour detail editor. Read back values; generate_studio_toolpath commits and verifies saved settings. Does not prove tab placement/strength or authorize cutting."""
         return await anyio.to_thread.run_sync(studio.configure_contour_tabs, operation_index, count, width_mm, height_mm, shape)
 
     @server.tool(annotations=local_write)
     async def generate_studio_toolpath(operation_index: int) -> dict:
-        """Run native planar pocket/contour/drilling calculation and save. Verify new linked nonempty native vertex buffers and pending tool parameters; no machine commands. Does not certify simulation or machining safety."""
+        """Run native planar pocket/contour/drilling or single-model relief calculation and save. Verify new linked nonempty native vertex buffers and pending tool parameters; no machine commands. Does not certify simulation or machining safety."""
         return await anyio.to_thread.run_sync(studio.generate_toolpath, operation_index)
 
     @server.tool(annotations=local_write)

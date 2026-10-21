@@ -58,3 +58,6 @@ mode可选register或select_existing。register会增改指定组内同名刀具
 
 
 工序可提供tabs={count,width_mm,height_mm,shape}。helper在选刀检查后的after_verification中先输出configure_studio_contour_tabs，再输出generate；这不是无需检查的批处理。详细页提交后须回读，并根据返回要求重新选刀、从列表重算，核对保存的刀具参数。原生支撑位置与留存运动另行检查。through_cut_allowance_mm按工序传递，先创建毛坯内占位区间，刷新快照后再编辑至允许区间；不能用全局名义余量替代实际依据。
+
+
+v0.8的kind=relief_3d映射为create_3d_relief：使用已验证模型mesh UUID、新鲜SHA和明确relief.layered/allowance_mm，参数改变使用configure_studio_3d_relief检查点，不调用二维深度编辑器。此时depth_mm是计划深度预算，不是写入二维字段；边界及具体记录见[十四种工序](operation-types.md)。其余特征/孔/边、旋转和激光工序仍不能由helper生成自动调用。

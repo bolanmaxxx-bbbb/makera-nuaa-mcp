@@ -90,8 +90,9 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         return {"ready": False, "calls": [], "job_checks": checked}
     catalog = audit(capabilities, tool_list)
     op = next((op for op in job["operations"] if op["id"] == operation_id), None)
-    if not op or op.get("kind") not in {"contour", "drill", "pocket"} or op.get("execution_mode") == "manual":
-        raise ValueError("Only automatic native pocket/contour/drill calls are implemented")
+    if not op or op.get("kind") not in {"contour", "drill", "pocket", "relief_3d"} or op.get("execution_mode") == "manual":
+        raise ValueError("Only automatic native pocket/contour/drill/model-relief calls are implemented")
+    is_relief = op["kind"] == "relief_3d"
     if binding.get("job_revision") != job["revision"]:
         raise ValueError("Binding belongs to a different job revision")
     project = Path(binding["project_path"]).resolve(strict=True)
@@ -102,9 +103,19 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     if Path(snapshot.get("path", "")).resolve() != project:
         raise ValueError("Project snapshot points to another file")
     geometry = binding["geometry_uuids"]
-    known = {item["uuid"] for item in snapshot.get("svg_geometry", [])}
+    models = snapshot.get("models_3d", [])
+    known = ({mesh["uuid"] for model in models for mesh in model.get("meshes", [])}
+             if is_relief else {item["uuid"] for item in snapshot.get("svg_geometry", [])})
     if not geometry or len(set(geometry)) != len(geometry) or any(uid not in known for uid in geometry):
         raise ValueError("Choose distinct geometry UUIDs from the current saved project")
+    relief = op.get("relief", {})
+    if is_relief:
+        if len(models)!=1 or not models[0].get("geometry_dimensions_verified") or len(models[0].get("meshes",[]))!=1 or len(geometry)!=1:
+            raise ValueError("Relief requires one verified single-mesh model, not SVG fallback geometry")
+        if type(relief.get("layered")) is not bool or isinstance(relief.get("allowance_mm"),bool) or not isinstance(relief.get("allowance_mm"),(int,float)) or not math.isfinite(relief["allowance_mm"]) or not 0 <= relief["allowance_mm"] <= 2:
+            raise ValueError("Explicit relief.layered and 0..2 mm relief.allowance_mm required")
+        if snapshot.get("stock",{}).get("StockShape")!=1:
+            raise ValueError("Relief currently requires rectangular stock")
     depth = op["depth_mm"]
     start = op.get("start_depth_mm", 0)
     if not isinstance(start, (int, float)) or isinstance(start, bool) or not math.isfinite(start) or not 0 <= start < depth:
@@ -117,6 +128,8 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         raise ValueError("Current connection does not support explicit through-cut allowance")
     if not isinstance(height, (int, float)) or isinstance(height, bool) or not math.isfinite(height) or depth > min(10, height + allowance):
         raise ValueError("Depth exceeds the native development adapter's stock/10 mm limit")
+    if is_relief and (height>10 or allowance or start!=0 or depth+1e-5 < -models[0]["meshes"][0]["bounds_after_node_transform_mm"]["z"][0]):
+        raise ValueError("Relief uses model depth: no planar interval/through allowance; depth budget must cover the transformed model")
     calls = []
 
     def call(name, arguments):
@@ -126,8 +139,12 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
 
     index = binding.get("operation_index")
     if index is None:
-        call({"contour": "create_2d_contour", "drill": "create_2d_drilling", "pocket": "create_2d_pocket"}[op["kind"]],
-             {"geometry_uuids": geometry, "end_depth_mm": min(depth, height)})
+        if is_relief:
+            call("create_3d_relief", {"model_uuid":geometry[0],"layered":relief["layered"],
+                "allowance_mm":relief["allowance_mm"],"project_sha256":digest})
+        else:
+            call({"contour": "create_2d_contour", "drill": "create_2d_drilling", "pocket": "create_2d_pocket"}[op["kind"]],
+                 {"geometry_uuids": geometry, "end_depth_mm": min(depth, height)})
         call("get_studio_operations", {})
         return {"ready": True, "phase": "create_only", "calls": calls,
                 "next": "Record the returned operation_index and refresh project_snapshot before configuring"}
@@ -136,10 +153,16 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     saved = next((item for item in snapshot.get("operations", []) if item.get("index") == index), {})
     if binding.get("native_operation_id") is None or binding["native_operation_id"] != saved.get("id"):
         raise ValueError("Bind the actual saved native operation id, not only its current list index")
-    if saved.get("type") != {"pocket": 0, "contour": 1, "drill": 2}[op["kind"]] or saved.get("geometry_uuids") != geometry:
+    if saved.get("type") != {"pocket": 0, "contour": 1, "drill": 2, "relief_3d":6}[op["kind"]] or saved.get("geometry_uuids") != geometry:
         raise ValueError("Saved native operation does not match the planned type/geometry")
     interval = saved.get("depth") or {}
-    if abs(interval.get("startDepth", -1) - start) > 0.000001 or abs(interval.get("endDepth", -1) - depth) > 0.000001:
+    if is_relief and ((saved.get("relief_settings") or {}).get("finishing") != [not relief["layered"]] or (saved.get("relief_settings") or {}).get("machining_allowance") != [relief["allowance_mm"]]):
+        call("configure_studio_3d_relief", {"operation_index":index,"layered":relief["layered"],
+            "allowance_mm":relief["allowance_mm"],"project_sha256":digest})
+        call("get_studio_operations", {})
+        return {"ready":True,"phase":"relief_settings_only","calls":calls,
+                "next":"Verify model selection, layering/allowance and invalidation; refresh snapshot before tool selection"}
+    if not is_relief and (abs(interval.get("startDepth", -1) - start) > 0.000001 or abs(interval.get("endDepth", -1) - depth) > 0.000001):
         arguments = {"operation_index": index, "start_depth_mm": start, "end_depth_mm": depth}
         if allowance:
             arguments["through_cut_allowance_mm"] = allowance

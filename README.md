@@ -2,7 +2,7 @@
 
 让 Codex 通过 MCP 直接调用 Makera Studio，逐步规划、生成并核对 CAM 结果。附带可复用的 `makera-studio-cam` 技能，支持引导推荐、可修改模板和自定义工艺流程。摄像头采样是辅助观测能力。
 
-当前版本 **0.7.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
+当前版本 **0.8.0**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
 
 ```text
 Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
@@ -25,7 +25,10 @@ Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
 | 原生计算、实际参数及运动顶点回读 | 已验证；钻孔另检查逐次退屑序列 |
 | 任务记录、输入检查和修订管理 | 已实现 |
 | 摄像头状态、JPEG 采样及本地证据导出 | 辅助功能，需配置已验证的本地视频地址 |
-| 完整面铣定厚、三维型腔/曲面等其余流程 | 尚未完成适配；区域清理不能直接视为完整定厚链 |
+| 全部14种原生工序分类 | 已核对选择器、原生type及创建保存；目录逐项区分计算能力 |
+| 单模型三维浮雕：分层粗加工/表面刀路 | 已验证受限范围；平底刀、方形毛坯厚≤10mm，斜面/曲面真实MCP计算与保存重开 |
+| 三维特征/轮廓/孔/倒角/螺纹、旋转和激光刀路 | 已分类与创建保存；各自计算适配尚待开发，不能以浮雕替代 |
+| 完整面铣定厚 | 尚未完成适配；区域清理不能直接视为完整定厚链 |
 | 仿真结果验证、NC 后处理交付 | 尚未实现 |
 | 机床探测、移动和切削控制 | 不提供 |
 
@@ -103,7 +106,7 @@ $makera-studio-cam
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
-技能已为当前36个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+技能已为当前39个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
 
 ## 软件验证流程
 
@@ -168,3 +171,16 @@ set_studio_operation_depths新增through_cut_allowance_mm（默认0，范围0～
 ```
 
 脚本通过真实MCP导入合成模型、旋转、移动、拒绝旧快照请求，并重开检查保存结果。技能新增[几何摆放与留件验收](skills/makera-studio-cam/references/geometry-and-retention.md)：核对3D参考与二维驱动几何、多个高度的实际留料，以及软件回归与正式交付的区别。连接筋设定宽度不保证实际残留宽度，几何扫掠检查不代替强度或仿真验证。
+
+## v0.8：全部工序分类与三维刀路
+
+新增`get_studio_operation_catalog`、`create_3d_relief`和`configure_studio_3d_relief`。完整分类见[十四种原生工序](skills/makera-studio-cam/references/operation-types.md)：5种二维铣削、6种三维加工、旋转雕刻及2种激光。原生目录与创建保存证据不等于全部计算接口已接通。
+
+三维浮雕已通过自行生成的斜面和连续曲面案例，分别计算分层粗加工与表面刀路、保存并重开。采样刀尖点对照解析面，修改余量后验证旧计算失效与新运动生成；这些检查不代替完整仿真、球刀表面质量或NC交付。
+
+```powershell
+& .\.venv\Scripts\python.exe .\scripts\validate_3d_relief_mcp.py --project <自备无工序无3D模型的MKS> --output-directory cases/三维验证 --tool-group <真实现有刀具组> --material-profile <真实材料标签>
+& .\.venv\Scripts\python.exe .\scripts\validate_operation_inventory.py --project <自备无工序MKS> --output-directory cases/工序分类
+```
+
+第一项通过真实MCP使用合成模型验证刀路；第二项是开发者原生适配器测试，仅创建空工序核对14种type，不证明14种都能计算。输出目录须全新，源文件保持不变；不发送机器指令。更新服务后须重连并读取实际版本，磁盘更新不等于挂载进程已经更新。

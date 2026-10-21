@@ -15,6 +15,7 @@ import frida
 
 from .config import Settings
 from .project import inspect_project
+from .operation_catalog import operation_catalog
 
 
 class NativeStudio:
@@ -417,7 +418,7 @@ class NativeStudio:
             info = next(t for t in tables if t['name']=='tableWidget_tool_infomation')
             values = {re.split(r'[（(]',header)[0].strip():row[0] for header,row in zip(info['row_labels'],info['values']) if header}
             saved_operation = inspect_project(str(self.managed_project))['operations'][operation_index]
-            if values.get('类型') != {0:'平底刀',1:'平底刀',2:'钻头'}.get(saved_operation['type']):
+            if values.get('类型') != {0:'平底刀',1:'平底刀',2:'钻头',6:'平底刀'}.get(saved_operation['type']):
                 raise ValueError('Selected tool type does not match the operation')
             rate_rows = next(t for t in tables if t['name']=='tableWidget_material')['values']
             rate = next(row for row in rate_rows if row[0]==material)
@@ -441,6 +442,99 @@ class NativeStudio:
 
     def create_pocket(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
         return self._create_2d(geometry_uuids, end_depth_mm, 'pocket')
+
+    def operation_catalog(self) -> dict:
+        with self.lock:
+            self._require_managed()
+            baseline = inspect_project(str(self.managed_project))['sha256']
+            self._wait_modal(None)
+            if not self._call('open_path_chooser')['queued']:
+                raise RuntimeError('Cannot read native chooser catalog')
+            self._wait_modal('AddKnifeTypeDlg')
+            try:
+                labels = self._call('path_type_options')
+            finally:
+                if self._call('path_summary')['modal_type'] == 'AddKnifeTypeDlg':
+                    self._call('cancel_path_chooser')
+                    self._wait_modal(None)
+            if inspect_project(str(self.managed_project))['sha256'] != baseline:
+                raise RuntimeError('Project unexpectedly changed during catalog read')
+            return {**operation_catalog(labels),'saved_project_unchanged':True}
+
+    def _relief_preflight(self, model_uuid, layered, allowance_mm, project_sha256, allow_pending_tool=False):
+        self._require_managed()
+        if not isinstance(model_uuid,str) or not re.fullmatch(r'[A-Za-z0-9-]{36}',model_uuid) or not isinstance(project_sha256,str) or not re.fullmatch(r'[a-f0-9]{64}',project_sha256):
+            raise ValueError('Expected current model mesh UUID and project SHA256')
+        if type(layered) is not bool or isinstance(allowance_mm, bool) or not isinstance(allowance_mm, (int,float)) or not math.isfinite(allowance_mm) or not 0 <= allowance_mm <= 2:
+            raise ValueError('Explicit layered boolean and finite 0..2 mm allowance required')
+        if (self.pending_tools and not allow_pending_tool) or self.pending_tabs:
+            raise RuntimeError('Commit or resolve pending CAM edits first')
+        snapshot = inspect_project(str(self.managed_project))
+        if not isinstance(project_sha256,str) or snapshot['sha256'] != project_sha256:
+            raise ValueError('Fresh project SHA256 required; inspect before creating/configuring')
+        meshes = [mesh for model in snapshot['models_3d'] for mesh in model['meshes']]
+        if len(snapshot['models_3d']) != 1 or not snapshot['models_3d'][0].get('geometry_dimensions_verified') or len(meshes) != 1 or meshes[0]['uuid'] != model_uuid:
+            raise ValueError('Relief currently requires one verified single-mesh 3D model')
+        bounds = meshes[0]['bounds_after_node_transform_mm']
+        stock = snapshot['stock']
+        if stock['StockShape'] != 1 or any(isinstance(stock.get(k),bool) or not isinstance(stock.get(k),(int,float)) or not math.isfinite(stock[k]) or stock[k]<=0 for k in ('length','width','height')) or stock['height'] > 10:
+            raise ValueError('Relief development scope: rectangular stock, thickness <=10 mm')
+        for axis, low, high in (('x',0,stock['length']),('y',0,stock['width']),('z',-stock['height'],0)):
+            if bounds[axis][0] < low-1e-5 or bounds[axis][1] > high+1e-5:
+                raise ValueError('Transformed model must be inside the stock')
+        live = self._call('path_summary')
+        if live['modal_type'] or len(live['paths']) != len(snapshot['operations']):
+            raise RuntimeError('Resolve dialogs/unsaved operation order before 3D editing')
+        return snapshot
+
+    def _commit_relief(self, index, model_uuid, layered, allowance_mm):
+        if not self._call('show_path_list')['visible']:
+            raise RuntimeError('Model preparation has not reached the native path list')
+        invoked = self._call('configure_relief',index,model_uuid,layered,allowance_mm)
+        if not all(invoked['invoked']):
+            raise RuntimeError('Native 3D relief configuration rejected; inspect before retry')
+        saved = self.save_project()
+        op = saved['project']['operations'][index] if saved['saved'] else {}
+        settings = op.get('relief_settings') or {}
+        verified = (op.get('type') == 6 and op.get('geometry_uuids') == [model_uuid]
+                    and settings.get('finishing') == [not layered]
+                    and settings.get('machining_allowance') == [allowance_mm])
+        return {'created_and_saved':verified,'saved_verified':verified,'operation_index':index,'operation':op,
+                'model_uuid':model_uuid,'layered':layered,'allowance_mm':allowance_mm,
+                'depth_basis':'transformed selected model; planar depth fields do not define relief depth',
+                'calculated':False,'machining_ready':False,'machine_commands_sent':False}
+
+    def create_relief(self, model_uuid: str, layered: bool, allowance_mm: float, project_sha256: str) -> dict:
+        """Create only a native relief operation, not feature/edge/rotary operations."""
+        with self.lock:
+            before = self._relief_preflight(model_uuid,layered,allowance_mm,project_sha256)
+            if not self._call('show_path_list')['visible']:
+                raise RuntimeError('Model preparation has not reached the native path list')
+            if not self._call('open_path_chooser')['queued']:
+                raise RuntimeError('Cannot open native path chooser')
+            self._wait_modal('AddKnifeTypeDlg')
+            if not self._call('choose_path_type','3D浮雕')['queued']:
+                raise RuntimeError('Cannot choose native relief')
+            self._wait_modal(None)
+            self._call('barrier')
+            live = self._call('path_summary')
+            index = len(before['operations'])
+            if len(live['paths']) != index+1:
+                raise RuntimeError('New relief operation count not verified; do not blindly retry')
+            return self._commit_relief(index,model_uuid,layered,allowance_mm)
+
+    def configure_relief(self, operation_index: int, layered: bool, allowance_mm: float, project_sha256: str) -> dict:
+        with self.lock:
+            self._require_managed()
+            snapshot = inspect_project(str(self.managed_project))
+            if type(operation_index) is not int or not 0 <= operation_index < len(snapshot['operations']):
+                raise ValueError('Saved operation index does not exist')
+            operation = snapshot['operations'][operation_index]
+            if operation['type'] != 6 or len(operation['geometry_uuids']) != 1:
+                raise ValueError('Expected a configured native relief operation')
+            uuid = operation['geometry_uuids'][0]
+            self._relief_preflight(uuid,layered,allowance_mm,project_sha256)
+            return self._commit_relief(operation_index,uuid,layered,allowance_mm)
 
     def _create_2d(self, geometry_uuids: list[str], end_depth_mm: float, kind: str) -> dict:
         """Create a native planar operation, verify geometry and depth persistence."""
@@ -576,8 +670,29 @@ class NativeStudio:
             if operation_index >= len(baseline_project['operations']):
                 raise ValueError('Saved operation index does not exist')
             operation = baseline_project['operations'][operation_index]
-            if operation['type'] not in (0,1,2) or not operation['geometry_uuids']:
-                raise ValueError('Only configured planar pocket/contour/drilling operations with selected geometry are supported')
+            if operation['type'] not in (0,1,2,6) or not operation['geometry_uuids']:
+                raise ValueError('Only configured planar pocket/contour/drilling or single-model relief operations are supported')
+            if operation['type'] == 6:
+                if len(operation['geometry_uuids']) != 1:
+                    raise ValueError('Relief requires exactly one selected model mesh')
+                models = baseline_project['models_3d']
+                if len(models)!=1 or not models[0].get('geometry_dimensions_verified') or len(models[0]['meshes'])!=1 or models[0]['meshes'][0]['uuid'] != operation['geometry_uuids'][0]:
+                    raise ValueError('Selected relief mesh no longer identifies the current verified model')
+                pending = self.pending_tools.get(operation_index)
+                tool = pending or (operation['tools'][0] if len(operation['tools']) == 1 else {})
+                for field in ('diameter','fluteLength','spindleSpeed','feedrate','plungeFeedrate','stepDown','stepOverMM'):
+                    value = tool.get(field)
+                    if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value < 1e-6:
+                        raise ValueError('Explicit verified flat-tool selection/parameters required before relief generation')
+                if tool['stepOverMM'] > tool['diameter'] or tool['stepDown'] >= tool['fluteLength']:
+                    raise ValueError('Relief tool increments exceed geometry')
+                if tool['fluteLength'] < baseline_project['stock']['height'] or (not pending and tool.get('toolType') != 1):
+                    raise ValueError('Relief requires a verified flat tool with flute length covering this stock-depth scope')
+                settings = operation.get('relief_settings') or {}
+                if len(settings.get('finishing') or []) != 1 or type(settings['finishing'][0]) is not bool or len(settings.get('machining_allowance') or []) != 1:
+                    raise ValueError('Relief has unknown layering/allowance settings')
+                self._relief_preflight(operation['geometry_uuids'][0],not settings['finishing'][0],
+                    settings['machining_allowance'][0],baseline_project['sha256'],allow_pending_tool=True)
             live = self._call('path_summary')
             if live['modal_type']:
                 raise RuntimeError('Resolve current Studio dialog before calculation')
@@ -609,6 +724,12 @@ class NativeStudio:
                     tool_matches = not pending or all((tool.get(key)==value if isinstance(value,str)
                         else isinstance(tool.get(key),(int,float)) and abs(tool[key]-value)<1e-6) for key,value in pending.items())
                     tabs_match = not tab_pending or all(isinstance((last.get('tab_settings') or {}).get(key), (int,float)) and abs(last['tab_settings'][key]-value)<1e-6 for key,value in tab_pending['expected'].items())
+                    if operation['type'] == 6 and last['calculation_evidence_verified'] and ids != old_ids and (
+                        last.get('relief_settings') != operation.get('relief_settings')
+                        or last.get('geometry_uuids') != operation.get('geometry_uuids')
+                        or saved['project']['models_3d'] != baseline_project['models_3d']):
+                        return {'verified':False,'outcome':'relief_inputs_changed_during_generation','operation':last,
+                                'machining_ready':False,'machine_commands_sent':False}
                     if last['calculation_evidence_verified'] and ids != old_ids and tabs_match and tab_pending and not tool_matches:
                         self.pending_tabs.pop(operation_index,None)
                         return {'verified': False, 'outcome': 'tabs_saved_but_tool_parameters_need_reselection',

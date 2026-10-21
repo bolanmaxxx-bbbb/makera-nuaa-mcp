@@ -24,6 +24,7 @@ from makera_mcp.project import inspect_project
 from makera_mcp.server import build_server
 from makera_mcp.tasks import validate_spec
 import test_skill_job_gate
+import test_model_placement
 
 
 SKILL = Path(__file__).resolve().parents[1] / "skills/makera-studio-cam"
@@ -32,7 +33,7 @@ WORKFLOW = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WORKFLOW)
 CATALOG = json.loads((SKILL / "assets/mcp-tool-map.json").read_text(encoding="utf-8"))
 NAMES = [item["name"] for item in CATALOG["tools"]]
-CAPS = {"version": "0.7.0", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
+CAPS = {"version": "0.8.0", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
 GEOMETRY = "12345678-1234-1234-1234-123456789abc"
 
 
@@ -67,6 +68,47 @@ class WorkflowPayloadTests(unittest.TestCase):
     def calls(self, tools=None, caps=None):
         return WORKFLOW.operation_calls(self.job, "feature", self.binding,
                                         CAPS if caps is None else caps, NAMES if tools is None else tools)
+
+    def relief_binding(self, configured=False, layered=True):
+        project=Path(self.binding['project_path'])
+        test_model_placement.fixture(project,center=(20,15,-3))
+        with zipfile.ZipFile(project) as z:
+            scene=z.read('makera.bin');data=json.loads(z.read('makera.prj'))
+        data['project']['stStockInfo']['height']=6
+        if configured:
+            data['project']['lstCoordinate']={'0':{'path':[{'id':'synthetic-relief','type':6,
+                'selectedmeshes':[test_model_placement.UUID],'finishing':[not layered],'machining_allowance':[.2]}]}}
+        with zipfile.ZipFile(project,'w') as z:
+            z.writestr('makera.bin',scene);z.writestr('makera.prj',json.dumps(data))
+        self.binding.update(project_snapshot=inspect_project(str(project)),geometry_uuids=[test_model_placement.UUID])
+        if configured:self.binding.update(operation_index=0,native_operation_id='synthetic-relief')
+        self.job['operations'][0].update(kind='relief_3d',depth_mm=6,relief={'layered':True,'allowance_mm':.2})
+
+    def test_relief_creation_binds_model_not_svg_or_planar_depth(self):
+        self.relief_binding()
+        result=self.calls()
+        self.assertTrue(result['ready'],result)
+        first=result['calls'][0]
+        self.assertEqual(first['tool'],'create_3d_relief')
+        self.assertEqual(first['arguments']['model_uuid'],test_model_placement.UUID)
+        self.assertEqual(first['arguments']['project_sha256'],self.binding['project_snapshot']['sha256'])
+        self.assertNotIn('end_depth_mm',first['arguments'])
+
+    def test_relief_settings_changes_are_a_separate_checkpoint(self):
+        self.relief_binding(configured=True,layered=False)
+        result=self.calls()
+        self.assertEqual(result['phase'],'relief_settings_only')
+        self.assertEqual(result['calls'][0]['tool'],'configure_studio_3d_relief')
+        self.assertFalse(any(c['tool']=='set_studio_operation_depths' for c in result['calls']))
+
+    def test_relief_tool_selection_and_generation_remain_separate(self):
+        self.relief_binding(configured=True)
+        result=self.calls()
+        self.assertEqual(result['phase'],'configure_only')
+        self.assertEqual(result['calls'][-1]['tool'],'select_studio_tool')
+        self.assertEqual(result['after_verification'][0]['tool'],'generate_studio_toolpath')
+        del self.job['operations'][0]['relief']
+        with self.assertRaises(ValueError):self.calls()
 
     def configured(self, kind=1):
         write_project(Path(self.binding["project_path"]), created=True, kind=kind)

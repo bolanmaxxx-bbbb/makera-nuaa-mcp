@@ -86,4 +86,4 @@
 7. 材料库规格使用`{"material_category":"<真实分类>","material_name":"<真实材料>","stock_specification":"<真实规格>"}`，不能混传自定义形状/尺寸。核对保存的规格名称、形状及实际尺寸，`bUsingMaterialSize`或界面标签不能单独证明尺寸已提交。目录尺寸仍是名义值。
 8. 配置成功必须检查`verified`和`saved_stock`。失败且返回`rolled_back`时再检查`rollback_saved_verified`；回滚不完整时停止依赖它的写入并保留现状。毛坯或模型变化需增加任务修订号，作废受影响的刀路、仿真及NC证据，重新检查深度、覆盖和夹具净空。
 
-材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录。v0.7的单模型摆放范围、实际留料及重开核对见[几何摆放与留件验收](geometry-and-retention.md)；其余未验证变换、STEP等格式及三维工序不借任意Qt槽补齐。其余开发项见[能力覆盖清单](capability-coverage.md)。
+材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录。v0.7的单模型摆放范围、实际留料及重开核对见[几何摆放与留件验收](geometry-and-retention.md)；其余未验证变换、STEP等格式及未适配三维工序不借任意Qt槽补齐。v0.8已接通的模型浮雕及其专属限制见[工序分类](operation-types.md)。其余开发项见[能力覆盖清单](capability-coverage.md)。
