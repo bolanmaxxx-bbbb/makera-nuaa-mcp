@@ -82,6 +82,7 @@ def build_server(settings: Settings | None = None):
                               "svg_geometry_uuid_and_vertex_bounds_inspection", "native_2d_contour_creation_geometry_selection_depth",
                               "native_2d_contour_calculation_and_saved_vertex_verification",
                               "native_tool_geometry_and_material_parameter_registration", "native_editor_tool_selection_and_generation_commit",
+                              "native_tool_inventory_geometry_without_cutting_profiles",
                               "native_2d_drilling_and_verified_peck_retraction_sequence",
                               "native_pocket_calculation_and_verification", "native_planar_start_end_depth_commit",
                               "native_contour_tabs_editor_and_saved_parameters", "native_explicit_through_cut_allowance",
@@ -94,13 +95,16 @@ def build_server(settings: Settings | None = None):
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
                 "not_implemented": ["other_model_import_formats", "multi_model_and_general_transform_commit", "native_project_creation_save_as",
-                                    "tool_group_creation", "other_tool_geometry_fields", "operation_reorder_copy_delete",
+                                    "general_tool_group_management", "other_tool_geometry_fields", "operation_reorder_copy_delete",
                                     "full_facing_to_thickness_workflow", "fixture_clearance_verification",
                                     "task_stage_completion_commit", "2d_thread_calculation",
                                     "3d_feature_contour_hole_edge_selection_and_calculation", "rotary_and_laser_calculation",
                                     "simulation_result_verification", "nc_postprocessing_verification",
                                     "direct_controller_telemetry", "machine_motion", "automatic_anomaly_classification"],
                 "operation_catalog_tool": "get_studio_operation_catalog",
+                "native_tool_inventory_scope": {"kinds":["flat_endmill","drill"],"requires_known_three_dimensions":True,
+                    "requires_existing_operation_entry":True,"active_cutting_profiles":False,
+                    "explicit_new_group_flag":True,"existing_named_tool_overwrite":False},
                 "native_2d_chamfer_scope": {"geometry":"saved_svg_edges","tool":"existing_native_V_tool",
                     "verified_tool_angles_deg":[90],
                     "tool_registration":False,"depth_basis":"start + chamfer_depth + tip_offset",
@@ -218,6 +222,11 @@ def build_server(settings: Settings | None = None):
     async def register_studio_tool(operation_index: int, group: str, specification: dict, material_profile: str, parameters: dict) -> dict:
         """Create/update a named native tool in an existing group through Studio's editor. specification: kind(endmill/drill),name,diameter,shank_diameter,flute_length. parameters: spindle_speed,feedrate,plunge_feedrate,step_down,step_over_mm. Verify native tables. These values require process validation before machining; no machine command is sent."""
         return await anyio.to_thread.run_sync(studio.register_tool, operation_index, group, specification, material_profile, parameters)
+
+    @server.tool(annotations=local_write)
+    async def register_studio_inventory_tool(operation_index: int, group: str, specification: dict, create_group_if_missing: bool = False) -> dict:
+        """Save geometry-only inventory in the native library without material/rate profiles or selecting the operation's tool. specification requires kind(endmill/drill),name,diameter,shank_diameter,flute_length; do not guess missing dimensions/end shape. Optional explicit group creation. Existing same-name tools must exactly match and have no profiles, otherwise reject without overwriting. Verify close/reopen; shoulder, stickout, tip, flutes and cutting parameters remain unverified. No machining."""
+        return await anyio.to_thread.run_sync(studio.register_inventory_tool, operation_index, group, specification, create_group_if_missing)
 
     @server.tool(annotations=local_write)
     async def select_studio_tool(operation_index: int, group: str, name: str, material_profile: str) -> dict:

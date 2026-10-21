@@ -44,6 +44,7 @@ const treeChild=fn(widgets,'?child@QTreeWidgetItem@@','pointer',['pointer','int'
 const treeChildCount=fn(widgets,'?childCount@QTreeWidgetItem@@','int',['pointer']);
 const treeItemText=fn(widgets,'?text@QTreeWidgetItem@@','pointer',['pointer','pointer','int']);
 const treeSetCurrent=fn(widgets,'?setCurrentItem@QTreeWidget@@QEAAXPEAVQTreeWidgetItem@@@Z','void',['pointer','pointer']);
+const treeCurrent=fn(widgets,'?currentItem@QTreeWidget@@','pointer',['pointer']);
 const listCount=fn(widgets,'?count@QListWidget@@','int',['pointer']);
 const listItem=fn(widgets,'?item@QListWidget@@','pointer',['pointer','int']);
 const listItemText=fn(widgets,'?text@QListWidgetItem@@','pointer',['pointer','pointer']);
@@ -215,7 +216,49 @@ function nameOf(object) {
   const result=Memory.alloc(8); objectName(object,result);
   try {return readQString(result);} finally {destroyQString(result);}
 }
+function libraryGroupTree(modal){
+  if(modal.isNull()||classOf(modal)!=='CutterLibWgt')throw new Error('Expected native tool library');
+  const trees=treeOf(modal).filter(o=>o.name==='treeWidget'&&isA(ptr(o.pointer),'QTreeWidget'));
+  if(trees.length!==1)throw new Error('Expected one library group tree');
+  return ptr(trees[0].pointer);
+}
+function groupName(item){const s=Memory.alloc(8);treeItemText(item,s,0);try{return readQString(s);}finally{destroyQString(s);}}
+function libraryGroups(tree){
+  const result=[];
+  function visit(item,depth){if(depth>12||result.length>2000)throw new Error('Unexpected library group tree');
+    for(let i=0;i<treeChildCount(item);i++){const child=treeChild(item,i);result.push({item:child,name:groupName(child),depth});visit(child,depth+1);}}
+  visit(treeRoot(tree),0);return result;
+}
+function renameEmptyToolGroup(modal,name){
+  if(typeof name!=='string'||!name.trim()||name!==name.trim()||name.length>60||/[\x00-\x1f]/.test(name))throw new Error('Invalid inventory group name');
+  const tree=libraryGroupTree(modal),current=treeCurrent(tree),tables=treeOf(modal).filter(o=>o.name==='tableWidget_tool'&&isA(ptr(o.pointer),'QTableWidget'));
+  if(current.isNull()||groupName(current)!=='新建刀具组'||treeChildCount(current)!==0||tables.length!==1||tableRows(ptr(tables[0].pointer))!==0)throw new Error('Only the current newly created empty group may be renamed');
+  if(libraryGroups(tree).some(g=>g.name===name))throw new Error('Target group already exists');
+  return {rename_queued:queueMethod(modal,'on_action_rename_tools_triggered'),requested_name:name,verified:false};
+}
+
 rpc.exports = {
+  acceptInventoryGroupName(hwnd,name){return onGui(hwnd,()=>{
+    const modal=activeModal();
+    if(modal.isNull()||classOf(modal)!=='QInputDialog'||typeof name!=='string'||!name.trim()||name!==name.trim()||name.length>60||/[\x00-\x1f]/.test(name))throw new Error('Expected inventory group rename prompt');
+    const objects=treeOf(modal),edits=objects.filter(o=>isA(ptr(o.pointer),'QLineEdit'));
+    if(!objects.some(o=>isA(ptr(o.pointer),'QLabel')&&getText(ptr(o.pointer),labelText)==='请输入新的名称')||edits.length!==1||getText(ptr(edits[0].pointer),lineText)!=='新建刀具组')throw new Error('Unexpected group rename prompt');
+    const set=queueMethod(ptr(edits[0].pointer),'setText',[{type:'QString',value:name}],1);
+    if(!set||getText(ptr(edits[0].pointer),lineText)!==name)throw new Error('Group name readback mismatch');
+    return {queued:queueMethod(modal,'accept'),requested_name:name};
+  });},
+  ensureInventoryGroup(hwnd,name,createIfMissing){return onGui(hwnd,()=>{
+    if(typeof createIfMissing!=='boolean'||typeof name!=='string'||!name.trim()||name!==name.trim()||name.length>60||/[\x00-\x1f]/.test(name))throw new Error('Invalid inventory group request');
+    const modal=activeModal(),tree=libraryGroupTree(modal),before=libraryGroups(tree),found=before.filter(g=>g.name===name);
+    if(found.length>1)throw new Error('Duplicate inventory group name');
+    if(found.length===1){treeSetCurrent(tree,found[0].item);return {verified:true,created:false,name};}
+    if(!createIfMissing)throw new Error('Inventory group does not exist; explicit creation flag required');
+    if(!queueMethod(modal,'on_action_new_tools_top_triggered',[],1))throw new Error('Native group creation rejected');
+    const added=libraryGroups(tree).filter(g=>!before.some(old=>old.item.equals(g.item)));
+    if(added.length!==1)throw new Error('Cannot identify newly created group; inspect before retrying');
+    treeSetCurrent(tree,added[0].item);
+    return {...renameEmptyToolGroup(modal,name),created:true};
+  });},
   placeSingleModel(hwnd,modelId,center,rotation){return onGui(hwnd,()=>{
     if(!activeModal().isNull()||!Number.isInteger(modelId)||modelId<0||![center,rotation].every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite))||rotation.filter(v=>v!==0).length>1)throw new Error('Invalid model placement');
     const objects=treeOf(rootOf(hwnd)),areas=objects.filter(o=>o.name==='widgetDesign'&&o.type==='CutterPathDesignArea'),dialogs=objects.filter(o=>o.type==='MoveDlg');
@@ -484,6 +527,18 @@ rpc.exports = {
       results.push(queueMethod(wrapper,'editingFinished',[],1));
     }
     return {invoked:results,save_enabled:enabled(find('pushButton_ok'))};
+  });},
+  readToolGeometryDraft(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();if(modal.isNull()||classOf(modal)!=='CutterEditDlg')throw new Error('Expected native tool editor');
+    const objects=treeOf(modal),one=name=>{const matches=objects.filter(o=>o.name===name);if(matches.length!==1)throw new Error('Missing tool geometry field '+name);return ptr(matches[0].pointer);};
+    const type=comboIndex(one('comboBox'));if(![1,5].includes(type))throw new Error('Inventory draft supports only flat tools/drills');
+    const result={kind:type===1?'endmill':'drill',name:getText(one('lineEdit'),lineText)};
+    for(const [key,name] of Object.entries({diameter:'lineEdit_diameter',shank_diameter:'lineEdit_shank_diameter',flute_length:'lineEdit_fluter_length'})){
+      const spins=childObjects(one(name)).filter(p=>isA(p,'QDoubleSpinBox'));
+      if(spins.length!==1||!Number.isFinite(spinValue(spins[0])))throw new Error('Invalid inventory draft geometry');
+      result[key]=spinValue(spins[0]);
+    }
+    return result;
   });},
   saveToolDialog(hwnd){return onGui(hwnd,()=>{
     const modal=activeModal();if(modal.isNull()||classOf(modal)!=='CutterEditDlg')throw new Error('Expected native tool editor');

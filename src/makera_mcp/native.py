@@ -336,6 +336,92 @@ class NativeStudio:
                 raise RuntimeError(f"Expected dialog {expected!r}, found {live['modal_type']!r}")
             time.sleep(.1)
 
+    def register_inventory_tool(self, operation_index: int, group: str, specification: dict, create_group_if_missing: bool = False) -> dict:
+        """Store geometry only, with no enabled cutting profile and no operation selection."""
+        with self.lock:
+            self._require_managed()
+            if type(operation_index) is not int or type(create_group_if_missing) is not bool:
+                raise ValueError('Expected explicit integer index and boolean group creation flag')
+            if not isinstance(group,str) or not group.strip() or group!=group.strip() or len(group)>60 or any(ord(c)<32 for c in group):
+                raise ValueError('Invalid inventory group name')
+            fields = {'kind','name','diameter','shank_diameter','flute_length'}
+            if not isinstance(specification,dict) or set(specification)!=fields or specification.get('kind') not in ('endmill','drill'):
+                raise ValueError('Inventory requires a flat endmill/drill and all three known dimensions')
+            name = specification['name']
+            if not isinstance(name,str) or not name.strip() or name!=name.strip() or len(name)>80 or any(ord(c)<32 for c in name):
+                raise ValueError('Invalid inventory tool name')
+            for key in fields-{'kind','name'}:
+                value = specification[key]
+                if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or not 0 < value <= 100:
+                    raise ValueError('Known finite positive inventory dimensions are required')
+            if self.pending_tabs or self.pending_chamfer or self.pending_tools:
+                raise RuntimeError('Commit or reopen pending CAM edits before inventory registration')
+            snapshot = inspect_project(str(self.managed_project))
+            if not 0 <= operation_index < len(snapshot['operations']):
+                raise ValueError('An existing operation is required to open the native library')
+            self._wait_modal(None)
+            created = False
+            def inspect_selected():
+                selected = self._call('select_library_tool',name,'')
+                tables = self._call('tool_tables')
+                info = next(t for t in tables if t['name']=='tableWidget_tool_infomation')
+                rows = {re.split(r'[（(]',header)[0].strip():row[0] for header,row in zip(info['row_labels'],info['values']) if header}
+                material = next(t for t in tables if t['name']=='tableWidget_material')
+                verified = (rows.get('名称')==name and rows.get('类型')=={'endmill':'平底刀','drill':'钻头'}[specification['kind']]
+                    and all(abs(float(rows.get(label,'nan'))-specification[key])<1e-6
+                        for label,key in {'直径':'diameter','刀柄直径':'shank_diameter','刃长':'flute_length'}.items())
+                    and material['rows']==0 and not selected.get('material_selected'))
+                return verified,info,material
+            try:
+                if not self._call('open_tool_editor',operation_index)['queued']:
+                    raise RuntimeError('Cannot open native inventory library')
+                self._wait_modal('CutterLibWgt')
+                ensured = self._call('ensure_inventory_group',group,create_group_if_missing)
+                if ensured.get('rename_queued'):
+                    self._wait_modal('QInputDialog')
+                    self._call('accept_inventory_group_name',group)
+                    self._wait_modal('CutterLibWgt')
+                    ensured = self._call('ensure_inventory_group',group,False)
+                if not ensured.get('verified'):
+                    raise RuntimeError('Inventory group was not verified; inspect before retrying')
+                tools = next(t for t in self._call('tool_tables') if t['name']=='tableWidget_tool')
+                existing = [row for row in tools['values'] if row[0]==name]
+                if len(existing)>1:
+                    raise RuntimeError('Duplicate inventory tool name; no overwrite performed')
+                if not existing:
+                    self._call('tool_library_action','add_tool')
+                    self._wait_modal('CutterEditDlg')
+                    configured = self._call('configure_tool_dialog',specification)
+                    draft = self._call('read_tool_geometry_draft')
+                    if not all(configured['invoked']) or not configured.get('save_enabled') or any(
+                            draft.get(k)!=v if isinstance(v,str) else not isinstance(draft.get(k),(int,float)) or abs(draft[k]-v)>1e-6
+                            for k,v in specification.items()):
+                        raise RuntimeError('Inventory geometry is not exactly representable; draft not saved')
+                    self._call('save_tool_dialog')
+                    self._wait_modal('CutterLibWgt')
+                    self._call('ensure_inventory_group',group,False)
+                    created = True
+                verified,info,material = inspect_selected()
+                if not verified:
+                    raise RuntimeError('Existing/saved inventory geometry or empty profile state differs; no overwrite performed')
+                self._call('tool_library_action','close')
+                self._wait_modal(None)
+                # Close/reopen the actual library, rather than relying on the editor cache.
+                self._call('open_tool_editor',operation_index)
+                self._wait_modal('CutterLibWgt')
+                self._call('ensure_inventory_group',group,False)
+                verified,info,material = inspect_selected()
+                return {'verified':verified,'created':created,'saved_and_reopened':verified,'group':group,
+                    'specification':specification,'native_geometry_table':info,'active_material_profile_count':material['rows'],
+                    'cutting_parameters_set':False,'operation_tool_selected':False,'machine_commands_sent':False,'machining_ready':False,
+                    'unverified_fields':['tip_or_end_shape','shoulder','stickout','flutes','tool_number','cutting_parameters']}
+            finally:
+                modal = self._call('path_summary')['modal_type']
+                if modal=='CutterEditDlg':
+                    self._call('cancel_tool_edit');self._wait_modal('CutterLibWgt');modal='CutterLibWgt'
+                if modal=='CutterLibWgt':
+                    self._call('tool_library_action','close');self._wait_modal(None)
+
     def register_tool(self, operation_index: int, group: str, specification: dict, material: str, parameters: dict) -> dict:
         """Native library upsert, with geometry and parameter table readback; no machine commands."""
         with self.lock:

@@ -33,7 +33,7 @@ WORKFLOW = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WORKFLOW)
 CATALOG = json.loads((SKILL / "assets/mcp-tool-map.json").read_text(encoding="utf-8"))
 NAMES = [item["name"] for item in CATALOG["tools"]]
-CAPS = {"version": "0.8.2", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
+CAPS = {"version": "0.8.3", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
 GEOMETRY = "12345678-1234-1234-1234-123456789abc"
 
 

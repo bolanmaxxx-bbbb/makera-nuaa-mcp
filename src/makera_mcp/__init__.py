@@ -1,3 +1,3 @@
 """Native Makera Studio CAM MCP with optional visual observation."""
 
-__version__ = "0.8.2"
+__version__ = "0.8.3"

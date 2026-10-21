@@ -6,9 +6,9 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.8.2；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.8.3；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整41工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整42工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 
@@ -20,7 +20,8 @@
 | 单模型摆放 | set_studio_model_placement | 一个模型/一个网格、方形毛坯、完整中心及新鲜SHA；可选单轴90°倍数相对旋转，保存矩阵/中心和无关输入核对后再重开检查 |
 | 读取材料/规格选项 | get_studio_stock_options | 真实分类与当前分类的子选项，不猜牌号 |
 | 配置形状/材料/完整尺寸 | configure_studio_stock | verified、保存后的stock及失败回滚证据；修改后重算受影响工序 |
-| 注册刀具与参数 | register_studio_tool | 原生尺寸/材料参数表逐字段回读；优先使用已存在的项目专用组；当前未适配新建组，缺组时说明能力缺口，不覆盖其他任务条目 |
+| 仅录入刀具几何 | register_studio_inventory_tool | 已知刀型和刃径/柄径/有效刃长，无材料参数、不选为工序刀具；保存后关闭重开，重复请求不覆盖已有工艺条目 |
+| 注册刀具与参数 | register_studio_tool | 原生尺寸/材料参数表逐字段回读；优先使用已存在的项目专用组；带参数注册接口本身不创建组；可先用仅录入流程建立自己的独立组，不覆盖其他任务条目 |
 | 选刀 | select_studio_tool | 编辑器匹配；工具参数在生成时提交，尚不代表已保存 |
 | 创建轮廓/钻孔 | create_2d_contour / create_2d_drilling | 几何UUID、区域尺寸、切深、工序类型匹配 |
 | 创建平面区域清理 | create_2d_pocket | 原生type=0；起始0、指定结束深度、SVG选区及默认平底刀需回读；不能冒充完整面铣定厚 |
@@ -90,3 +91,13 @@
 材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录。v0.7的单模型摆放范围、实际留料及重开核对见[几何摆放与留件验收](geometry-and-retention.md)；其余未验证变换、STEP等格式及未适配三维工序不借任意Qt槽补齐。v0.8已接通的模型浮雕及其专属限制见[工序分类](operation-types.md)。其余开发项见[能力覆盖清单](capability-coverage.md)。
 
 自动恢复或打开工程失败时，先保留可恢复的原始数据及哈希，再检查恢复副本能否实际打开和保留工序；恢复按钮排队成功不等于工程已恢复。当前MCP未暴露通用弹窗确认，未知提示不能自动丢弃。
+
+## 仅录入刀具：照片或清单
+
+用户只要求把现有刀具入库时，不把它扩展成材料切削参数制定。先区分刀具与夹头等配件，逐项记录标签、规格次序及来源；平底/球头/尖头等端形不清、柄径与刃径无法区分时先确认。包装上的适用材料不是刀具本体材质；柄径不能代替最大刃径。型号、角度、刃数或数量只记录能读清/已经确认的值。
+
+已知平底刀/钻头及三项完整几何时，调用register_studio_inventory_tool(operation_index, group, specification, create_group_if_missing=false)。specification仅含kind=endmill/drill、name、diameter、shank_diameter、flute_length。需隔离工程中有可打开原生选刀器的工序作为入口；不会为该工序选刀。已有组优先；明确选择新组时可传create_group_if_missing=true，只创建当前请求识别出的新空组，异步处理它自己的重命名提示，随后重新核对名称。不会通用确认其他弹窗。
+
+该接口不启用任何材料参数。成功需verified、saved_and_reopened为true、active_material_profile_count=0，且cutting_parameters_set和operation_tool_selected为false。已存在同名刀具只有几何相符且无材料参数时才复用，否则停止，不覆盖别的工艺条目。精度不能表达的几何在保存前拒绝。录入后核对原工程选刀/刀路未变；批量录入前保留可恢复刀库备份。
+
+未知尺寸不填库默认值或其他刀具尺寸。信息不全的条目先保存本地待补清单（空值、来源、缺项、是否已写入Studio），照片、备份和实物信息不随公共代码发布。原生编辑器可能仍有默认肩长、伸出、尖端或刀号；这些不是物理确认值，接口unverified_fields须留作后续加工检查。只有另有材料和工艺依据、用户需要配置加工参数时，才使用register_studio_tool并按正式CAM重新验收。
