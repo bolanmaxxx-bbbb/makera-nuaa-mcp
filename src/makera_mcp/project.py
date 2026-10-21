@@ -145,6 +145,9 @@ def inspect_project(path: str) -> dict:
                         ('finishing','machining_allowance','bounding','bound_offset','pocket_strategy','parallel_angle','path_direction','toolcontainment','safe')}
                         if native_path.get('type') == 6 else None),
                     'tab_settings': native_path.get('tab'),
+                    'chamfer_settings': ({key:native_path.get(key) for key in
+                        ('chamferTipOffset','contourPosition','workDirection')}
+                        if native_path.get('type') == 13 else None),
                     'support_tab_list': native_path.get('support_tab_list', []),
                     'support_mesh_ids': native_path.get('supportmeshesuuid', []),
                     'drilling_retract': {key:native_path[key] for key in ('retract_distance','retract_position','retract_z') if key in native_path},

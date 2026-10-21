@@ -10,7 +10,7 @@ OPERATIONS = [
     (9, 'thread_2d', '2D螺纹', 'planar_milling', 'svg_thread_locations', 'thread_mill',
      ['major_diameter','pitch','internal_external','handedness','pre_hole','thread_depth'], 'internal_external_thread', None),
     (13, 'chamfer_2d', '2D倒角', 'planar_milling', 'svg_edges', 'chamfer_tool',
-     ['tool_angle_tip','inside_outside','chamfer_size_depth','tip_offset'], 'inside_outside_chamfer', None),
+     ['tool_angle_tip','inside_outside','chamfer_size_depth','tip_offset'], 'inside_outside_chamfer', 'create_2d_chamfer'),
     (6, 'relief_3d', '3D浮雕', 'model_milling', 'verified_model_mesh', 'flat_or_ball_endmill',
      ['model_pose','layered_or_surface','depth_allowance','bounding','stepover_scallop'], 'curved_heightfield', 'create_3d_relief'),
     (7, 'feature_3d', '3D特征加工', 'model_milling', 'model_faces_and_features', 'flat_endmill',
@@ -43,7 +43,8 @@ def operation_catalog(native_labels):
                         'mcp_creation_tool':creation,
                         'mcp_calculation_supported':creation is not None and label in observed,
                         'boundary':('3D relief currently supports a single model and verified flat tools only'
-                                    if native_type == 6 else 'Only the advertised MCP parameter subset is executable'
+                                    if native_type == 6 else '2D SVG edges with existing 90-degree V tools; no V registration or 3D edges'
+                                    if native_type == 13 else 'Only the advertised MCP parameter subset is executable'
                                     if creation else 'Native type cataloged; selection/parameter/calculation adapter not yet verified'),
                         'simulation_verified':False,'nc_export_verified':False,'machine_commands_sent':False})
     return {'operations':entries,'native_labels':native_labels,

@@ -61,3 +61,7 @@ mode可选register或select_existing。register会增改指定组内同名刀具
 
 
 v0.8的kind=relief_3d映射为create_3d_relief：使用已验证模型mesh UUID、新鲜SHA和明确relief.layered/allowance_mm，参数改变使用configure_studio_3d_relief检查点，不调用二维深度编辑器。此时depth_mm是计划深度预算，不是写入二维字段；边界及具体记录见[十四种工序](operation-types.md)。其余特征/孔/边、旋转和激光工序仍不能由helper生成自动调用。
+
+v0.8.2的kind=chamfer使用SVG边及现有90°V刀。工具填kind=engraver、geometry=v、included_angle_deg=90及tip_diameter_mm；工序chamfer填depth_mm、tip_offset_mm、side和direction。工序外层depth_mm须等于start_depth_mm+chamfer.depth_mm，后者才是传入chamfer_depth_mm的倒角量。刀尖实际深度还须加端部偏移，且不能超出毛坯、有效刃长与锥刃限制。
+
+创建、选刀核对、暂存倒角参数与计算分别验收，不调用通用set_studio_operation_depths修改倒角。返回chamfer_saved_but_tool_parameters_need_reselection时保留已保存工序，重新选刀、从列表重算，刷新快照并核对全部参数；不盲目重建工序。二维倒角不代表三维边倒角已接通。

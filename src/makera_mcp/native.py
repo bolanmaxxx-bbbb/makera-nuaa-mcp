@@ -29,6 +29,7 @@ class NativeStudio:
         self.managed_project = None
         self.pending_tools = {}
         self.pending_tabs = {}
+        self.pending_chamfer = {}
 
     def connect(self) -> dict:
         with self.lock:
@@ -88,6 +89,7 @@ class NativeStudio:
                     self.managed_project = None
                     self.pending_tools = {}
                     self.pending_tabs = {}
+                    self.pending_chamfer = {}
 
     def _call(self, method: str, *args):
         with self.lock:
@@ -127,7 +129,7 @@ class NativeStudio:
                 raise ValueError('Only one world axis and explicit 90-degree increments within -180..180 are verified')
             if not isinstance(model_uuid,str) or not re.fullmatch(r'[A-Za-z0-9-]{36}',model_uuid) or not isinstance(project_sha256,str) or not re.fullmatch(r'[a-f0-9]{64}',project_sha256):
                 raise ValueError('Expected the current native mesh UUID and project SHA256')
-            if self.pending_tabs or self.pending_tools:
+            if self.pending_tabs or self.pending_chamfer or self.pending_tools:
                 raise RuntimeError('Commit or reopen pending CAM settings before model placement')
             current = inspect_project(str(self.managed_project))
             if current['sha256'] != project_sha256:
@@ -179,7 +181,7 @@ class NativeStudio:
             untouched = (after.get('svg_geometry')==current['svg_geometry'] and after.get('stock')==current['stock']
                          and len(after.get('models_3d',[]))==1 and len(updated.get('meshes',[]))==1
                          and placed.get('dimensions_mm')==mesh['dimensions_mm'] and placed.get('vertex_count')==mesh['vertex_count'])
-            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings','relief_settings')
+            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings','relief_settings','chamfer_settings')
             untouched = untouched and [{k:o.get(k) for k in op_keys} for o in after.get('operations',[])]==[{k:o.get(k) for k in op_keys} for o in current['operations']]
             return {'verified':bool(native.get('invoked') and saved.get('saved') and pose_matches and untouched),
                     'native_result':native,'model':updated,'unrelated_inputs_unchanged':untouched,
@@ -212,7 +214,7 @@ class NativeStudio:
                 raise ValueError('A stock catalog specification requires category/name and cannot be combined with custom shape/dimensions')
             if not dimensions and not shape and not all(material):
                 raise ValueError('No stock configuration was requested')
-            if self.pending_tabs:
+            if self.pending_tabs or self.pending_chamfer:
                 raise RuntimeError('Commit or reopen pending contour details before stock editing')
             baseline = self.save_project()
             if not baseline.get('saved'):
@@ -255,7 +257,7 @@ class NativeStudio:
                 raise ValueError('Import units must explicitly be mm and allow_duplicate must be boolean')
             if not 0 < source.stat().st_size <= 64*1024*1024:
                 raise ValueError('Expected a nonempty model no larger than 64 MiB')
-            if self.pending_tabs:
+            if self.pending_tabs or self.pending_chamfer:
                 raise RuntimeError('Commit or reopen pending contour details before import')
             identity = {'path':str(source),'bytes':source.stat().st_size,'sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'declared_units':units}
             baseline = self.save_project()
@@ -338,6 +340,8 @@ class NativeStudio:
         """Native library upsert, with geometry and parameter table readback; no machine commands."""
         with self.lock:
             self._require_managed()
+            if self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit or reopen pending detail edits before editing the library')
             if not isinstance(specification, dict) or set(specification) != {'kind', 'name', 'diameter', 'shank_diameter', 'flute_length'}:
                 raise ValueError('Expected kind/name/diameter/shank_diameter/flute_length')
             if specification['kind'] not in ('endmill', 'drill') or not isinstance(specification['name'], str) or not specification['name']:
@@ -407,25 +411,53 @@ class NativeStudio:
     def select_tool(self, operation_index: int, group: str, name: str, material: str) -> dict:
         with self.lock:
             self._require_managed()
+            snapshot = inspect_project(str(self.managed_project))
+            if type(operation_index) is not int or not 0 <= operation_index < len(snapshot['operations']):
+                raise ValueError('Expected an existing operation index')
+            expected_kind = {0:'平底刀',1:'平底刀',2:'钻头',6:'平底刀',13:'V刀'}.get(snapshot['operations'][operation_index]['type'])
+            if expected_kind is None:
+                raise ValueError('Tool selection for this operation is not adapted')
+            if self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit or reopen pending detail edits before selecting a tool')
             self._wait_modal(None)
             self._call('open_tool_editor', operation_index)
             self._wait_modal('CutterLibWgt')
-            self._call('select_tool_group', group)
-            selected = self._call('select_library_tool', name, material)
-            if not selected['material_selected']:
-                raise RuntimeError('Requested tool material parameters are missing')
-            tables = self._call('tool_tables')
-            info = next(t for t in tables if t['name']=='tableWidget_tool_infomation')
-            values = {re.split(r'[（(]',header)[0].strip():row[0] for header,row in zip(info['row_labels'],info['values']) if header}
-            saved_operation = inspect_project(str(self.managed_project))['operations'][operation_index]
-            if values.get('类型') != {0:'平底刀',1:'平底刀',2:'钻头',6:'平底刀'}.get(saved_operation['type']):
-                raise ValueError('Selected tool type does not match the operation')
-            rate_rows = next(t for t in tables if t['name']=='tableWidget_material')['values']
-            rate = next(row for row in rate_rows if row[0]==material)
-            expected = {'toolName':name,'diameter':float(values['直径']),'fluteLength':float(values['刃长']),
-                        'handleDiameter':float(values['刀柄直径']), 'spindleSpeed':float(rate[1]),
-                        'feedrate':float(rate[2]),'plungeFeedrate':float(rate[3]),'stepDown':float(rate[4]),'stepOverMM':float(rate[5])}
-            self._call('tool_library_action', 'choose')
+            try:
+                self._call('select_tool_group', group)
+                selected = self._call('select_library_tool', name, material)
+                if not selected['material_selected']:
+                    raise RuntimeError('Requested tool material parameters are missing')
+                tables = self._call('tool_tables')
+                info = next(t for t in tables if t['name']=='tableWidget_tool_infomation')
+                values = {re.split(r'[（(]',header)[0].strip():row[0] for header,row in zip(info['row_labels'],info['values']) if header}
+                if values.get('类型') != expected_kind:
+                    raise ValueError('Selected tool type does not match the operation')
+                rate_rows = next(t for t in tables if t['name']=='tableWidget_material')['values']
+                rate = next(row for row in rate_rows if row[0]==material)
+                expected = {'toolName':name,'diameter':float(values['直径']),'fluteLength':float(values['刃长']),
+                            'handleDiameter':float(values['刀柄直径']), 'spindleSpeed':float(rate[1]),
+                            'feedrate':float(rate[2]),'plungeFeedrate':float(rate[3]),'stepDown':float(rate[4]),'stepOverMM':float(rate[5])}
+                if expected_kind == 'V刀':
+                    # The V information table omits tip diameter. Read the native
+                    # geometry editor without changing/saving it, then verify the
+                    # values again in the calculated project.
+                    self._call('tool_library_action','edit_tool')
+                    self._wait_modal('CutterEditDlg')
+                    try:
+                        geometry = self._call('read_v_tool_geometry')
+                    finally:
+                        if self._call('path_summary')['modal_type'] == 'CutterEditDlg':
+                            self._call('cancel_tool_edit')
+                            self._wait_modal('CutterLibWgt')
+                    expected.update(toolType=2, **geometry)
+                    self._validate_chamfer_tool(expected)
+                self._call('tool_library_action', 'choose')
+            except Exception:
+                # Reject a wrong cutter without leaving its chooser blocking the next request.
+                if self._call('path_summary')['modal_type'] == 'CutterLibWgt':
+                    self._call('tool_library_action', 'close')
+                    self._wait_modal(None)
+                raise
             self._wait_modal(None)
             live = self._call('path_summary')
             editor = live['paths'][operation_index]
@@ -442,6 +474,80 @@ class NativeStudio:
 
     def create_pocket(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
         return self._create_2d(geometry_uuids, end_depth_mm, 'pocket')
+
+    def create_chamfer(self, geometry_uuids: list[str], chamfer_depth_mm: float) -> dict:
+        return self._create_2d(geometry_uuids, chamfer_depth_mm, 'chamfer')
+
+    @staticmethod
+    def _validate_chamfer_tool(tool):
+        positive = ('diameter','handleDiameter','fluteLength','spindleSpeed','feedrate','plungeFeedrate','stepDown','stepOverMM','angle')
+        if not isinstance(tool.get('toolName'),str) or not tool['toolName'].strip() or tool.get('toolType') != 2 or any(isinstance(tool.get(k),bool) or not isinstance(tool.get(k),(int,float))
+                or not math.isfinite(tool[k]) or tool[k] < 1e-6 for k in positive):
+            raise ValueError('Chamfer requires a verified V tool and explicit positive cutting parameters')
+        tip = tool.get('tipDiameter')
+        if isinstance(tip,bool) or not isinstance(tip,(int,float)) or not math.isfinite(tip) or not 0 <= tip < tool['diameter'] or tool['angle'] >= 180:
+            raise ValueError('Invalid V tool angle or tip diameter')
+        if abs(tool['angle']-90)>1e-6:
+            raise ValueError('Current verified chamfer scope requires a 90-degree V tool')
+        if tool['stepDown'] >= tool['fluteLength'] or tool['stepOverMM'] > tool['diameter']:
+            raise ValueError('Chamfer tool increments exceed geometry')
+
+    def _chamfer_preflight(self, snapshot, index, start, chamfer_depth, tip_offset, side, direction):
+        if type(index) is not int or not 0 <= index < len(snapshot['operations']) or snapshot['operations'][index]['type'] != 13:
+            raise ValueError('Expected an existing 2D chamfer operation')
+        if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in (start,chamfer_depth,tip_offset)) or not 0 <= start <= 10 or not 0 < chamfer_depth <= 10 or not 0 <= tip_offset <= 2:
+            raise ValueError('Expected nonnegative start, positive chamfer depth, and 0..2 mm tip offset')
+        if side not in ('inside','outside') or direction not in ('climb','conventional'):
+            raise ValueError('Explicit inside/outside and climb/conventional required')
+        op = snapshot['operations'][index]
+        known = {item['uuid'] for item in snapshot['svg_geometry']}
+        if not op['geometry_uuids'] or any(uid not in known for uid in op['geometry_uuids']):
+            raise ValueError('Chamfer requires current saved SVG geometry')
+        tool = self.pending_tools.get(index) or (op['tools'][0] if len(op['tools']) == 1 else {})
+        self._validate_chamfer_tool(tool)
+        cone_length = (tool['diameter']-tool['tipDiameter']) / (2*math.tan(math.radians(tool['angle']/2)))
+        # Native endDepth means chamfer SIZE here, not an absolute end depth.
+        tip_depth = start+chamfer_depth+tip_offset
+        if tip_depth > min(10,snapshot['stock']['height'],tool['fluteLength'])+1e-8 or chamfer_depth+tip_offset > cone_length+1e-8:
+            raise ValueError('Chamfer tip depth exceeds stock or usable V cutting geometry')
+        return op
+
+    def configure_chamfer(self, operation_index: int, start_depth_mm: float, chamfer_depth_mm: float,
+                          tip_offset_mm: float, side: str, direction: str, project_sha256: str) -> dict:
+        """Stage explicit native chamfer details; generation commits and verifies them."""
+        with self.lock:
+            self._require_managed()
+            snapshot = inspect_project(str(self.managed_project))
+            if not isinstance(project_sha256,str) or snapshot['sha256'] != project_sha256:
+                raise ValueError('Fresh saved project SHA256 required')
+            op = self._chamfer_preflight(snapshot,operation_index,start_depth_mm,chamfer_depth_mm,tip_offset_mm,side,direction)
+            if self.pending_tabs or self.pending_chamfer or any(i != operation_index for i in self.pending_tools):
+                raise RuntimeError('Commit or reopen other pending CAM edits first')
+            live = self._call('path_summary')
+            if live['modal_type'] or len(live['paths']) != len(snapshot['operations']):
+                raise RuntimeError('Resolve dialogs or unsaved operation order before chamfer editing')
+            if not self._call('open_operation_details',operation_index)['queued']:
+                raise RuntimeError('Cannot open chamfer details')
+            result = self._call('configure_chamfer_details',start_depth_mm,chamfer_depth_mm,tip_offset_mm,side,direction)
+            requested = {'lineEdit_start_depth_2':start_depth_mm,'lineEdit_end_depth_2':chamfer_depth_mm,'lineEdit_finish_2':tip_offset_mm}
+            if not all(result['invoked']) or not result.get('choices_checked') or any(abs(result['readback'].get(k,-1)-v)>1e-6 for k,v in requested.items()):
+                raise RuntimeError('Chamfer native editor values did not match; inspect before retrying')
+            expected = {'chamferTipOffset':tip_offset_mm,'contourPosition':1 if side=='inside' else 0,'workDirection':1 if direction=='climb' else 0}
+            self.pending_chamfer[operation_index] = {'native_operation_id':op['id'],'geometry_uuids':op['geometry_uuids'],
+                'depth':{'startDepth':start_depth_mm,'endDepth':chamfer_depth_mm},'expected':expected,'side':side,'direction':direction,
+                'project_sha256':snapshot['sha256']}
+            if operation_index not in self.pending_tools:
+                # A detail revision can overwrite even a previously saved tool.
+                # Preserve its verified cutting fields so that a new motion mesh
+                # cannot conceal that overwrite when no reselection was staged.
+                self.pending_tools[operation_index] = {key:op['tools'][0][key] for key in
+                    ('toolName','toolType','diameter','handleDiameter','fluteLength','angle','tipDiameter',
+                     'spindleSpeed','feedrate','plungeFeedrate','stepDown','stepOverMM')}
+            return {'verified':True,'verification_scope':'native editor values only','saved_verified':False,
+                    'operation_index':operation_index,'expected_saved_chamfer_after_generation':expected,
+                    'parameter_commit_stage':'generate_studio_toolpath','recalculation_required':True,
+                    'native_endDepth_meaning':'chamfer depth, not absolute end Z','tip_depth_mm':start_depth_mm+chamfer_depth_mm+tip_offset_mm,
+                    'machine_commands_sent':False,'machining_ready':False}
 
     def operation_catalog(self) -> dict:
         with self.lock:
@@ -467,7 +573,7 @@ class NativeStudio:
             raise ValueError('Expected current model mesh UUID and project SHA256')
         if type(layered) is not bool or isinstance(allowance_mm, bool) or not isinstance(allowance_mm, (int,float)) or not math.isfinite(allowance_mm) or not 0 <= allowance_mm <= 2:
             raise ValueError('Explicit layered boolean and finite 0..2 mm allowance required')
-        if (self.pending_tools and not allow_pending_tool) or self.pending_tabs:
+        if (self.pending_tools and not allow_pending_tool) or self.pending_tabs or self.pending_chamfer:
             raise RuntimeError('Commit or resolve pending CAM edits first')
         snapshot = inspect_project(str(self.managed_project))
         if not isinstance(project_sha256,str) or snapshot['sha256'] != project_sha256:
@@ -540,7 +646,9 @@ class NativeStudio:
         """Create a native planar operation, verify geometry and depth persistence."""
         with self.lock:
             self._require_managed()
-            types = {'pocket': (0, '2D区域清理'), 'contour': (1, '2D轮廓'), 'drilling': (2, '2D钻孔')}
+            if self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit or reopen pending detail edits before creating an operation')
+            types = {'pocket': (0, '2D区域清理'), 'contour': (1, '2D轮廓'), 'drilling': (2, '2D钻孔'), 'chamfer': (13, '2D倒角')}
             if kind not in types:
                 raise ValueError('Unsupported planar operation kind')
             if not isinstance(geometry_uuids, list) or not geometry_uuids or len(set(geometry_uuids)) != len(geometry_uuids):
@@ -594,6 +702,8 @@ class NativeStudio:
         """Commit an explicit planar depth interval; require fresh calculation afterward."""
         with self.lock:
             self._require_managed()
+            if self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit or reopen pending detail edits before editing depths')
             if isinstance(operation_index, bool) or not isinstance(operation_index, int) or operation_index < 0:
                 raise ValueError('Expected a nonnegative operation index')
             if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
@@ -642,7 +752,7 @@ class NativeStudio:
             depth = op.get('depth') or {}
             if height_mm >= depth.get('endDepth', 0) - depth.get('startDepth', 0):
                 raise ValueError('Tab height must be smaller than the contour cutting interval')
-            if self.pending_tabs:
+            if self.pending_tabs or self.pending_chamfer:
                 raise RuntimeError('Commit or reopen the project before staging another tab change')
             live = self._call('path_summary')
             if live['modal_type'] or len(live['paths']) != len(baseline['operations']):
@@ -670,7 +780,7 @@ class NativeStudio:
             if operation_index >= len(baseline_project['operations']):
                 raise ValueError('Saved operation index does not exist')
             operation = baseline_project['operations'][operation_index]
-            if operation['type'] not in (0,1,2,6) or not operation['geometry_uuids']:
+            if operation['type'] not in (0,1,2,6,13) or not operation['geometry_uuids']:
                 raise ValueError('Only configured planar pocket/contour/drilling or single-model relief operations are supported')
             if operation['type'] == 6:
                 if len(operation['geometry_uuids']) != 1:
@@ -693,6 +803,21 @@ class NativeStudio:
                     raise ValueError('Relief has unknown layering/allowance settings')
                 self._relief_preflight(operation['geometry_uuids'][0],not settings['finishing'][0],
                     settings['machining_allowance'][0],baseline_project['sha256'],allow_pending_tool=True)
+            chamfer_pending = self.pending_chamfer.get(operation_index)
+            if self.pending_chamfer and not chamfer_pending:
+                raise RuntimeError('Another operation has uncommitted chamfer details')
+            if operation['type'] == 13:
+                if chamfer_pending:
+                    if chamfer_pending['native_operation_id'] != operation['id'] or chamfer_pending['project_sha256'] != baseline_project['sha256']:
+                        raise RuntimeError('Pending chamfer belongs to a different operation or saved revision')
+                    depth,settings = chamfer_pending['depth'],chamfer_pending['expected']
+                else:
+                    depth,settings = operation.get('depth') or {},operation.get('chamfer_settings') or {}
+                if settings.get('contourPosition') not in (0,1) or settings.get('workDirection') not in (0,1):
+                    raise ValueError('Unknown saved chamfer position/direction')
+                self._chamfer_preflight(baseline_project,operation_index,depth.get('startDepth'),depth.get('endDepth'),
+                    settings.get('chamferTipOffset'),'inside' if settings['contourPosition']==1 else 'outside',
+                    'climb' if settings['workDirection']==1 else 'conventional')
             live = self._call('path_summary')
             if live['modal_type']:
                 raise RuntimeError('Resolve current Studio dialog before calculation')
@@ -704,7 +829,8 @@ class NativeStudio:
                 raise RuntimeError('Another operation has uncommitted contour details')
             if tab_pending and tab_pending['native_operation_id'] != operation.get('id'):
                 raise RuntimeError('Pending tabs belong to a different native operation')
-            if not self._call('calculate_contour_details' if tab_pending else 'generate_path', *([] if tab_pending else [operation_index]))['queued']:
+            calculation = 'calculate_chamfer_details' if chamfer_pending else 'calculate_contour_details' if tab_pending else 'generate_path'
+            if not self._call(calculation, *([] if tab_pending or chamfer_pending else [operation_index]))['queued']:
                 raise RuntimeError('Native contour calculation invocation rejected')
             deadline = time.monotonic() + 30
             last = operation
@@ -724,6 +850,14 @@ class NativeStudio:
                     tool_matches = not pending or all((tool.get(key)==value if isinstance(value,str)
                         else isinstance(tool.get(key),(int,float)) and abs(tool[key]-value)<1e-6) for key,value in pending.items())
                     tabs_match = not tab_pending or all(isinstance((last.get('tab_settings') or {}).get(key), (int,float)) and abs(last['tab_settings'][key]-value)<1e-6 for key,value in tab_pending['expected'].items())
+                    chamfer_expected = chamfer_pending['expected'] if chamfer_pending else operation.get('chamfer_settings')
+                    chamfer_depth = chamfer_pending['depth'] if chamfer_pending else operation.get('depth')
+                    chamfer_matches = operation['type'] != 13 or (last.get('chamfer_settings') == chamfer_expected
+                        and last.get('geometry_uuids') == operation['geometry_uuids']
+                        and all(abs((last.get('depth') or {}).get(k,-1)-chamfer_depth[k])<1e-6 for k in ('startDepth','endDepth')))
+                    if operation['type'] == 13 and last['calculation_evidence_verified'] and ids != old_ids and not chamfer_matches:
+                        return {'verified':False,'outcome':'chamfer_inputs_changed_during_generation','operation':last,
+                                'machine_commands_sent':False,'machining_ready':False}
                     if operation['type'] == 6 and last['calculation_evidence_verified'] and ids != old_ids and (
                         last.get('relief_settings') != operation.get('relief_settings')
                         or last.get('geometry_uuids') != operation.get('geometry_uuids')
@@ -737,9 +871,16 @@ class NativeStudio:
                                 'operation': last, 'expected_tool': pending,
                                 'required_action': 'Reselect the intended tool, regenerate from the path list, then verify saved parameters',
                                 'simulation_verified': False, 'machining_ready': False, 'machine_commands_sent': False}
-                    if last['calculation_evidence_verified'] and (not old_ids or ids != old_ids) and tool_matches and tabs_match:
+                    if last['calculation_evidence_verified'] and ids != old_ids and chamfer_pending and chamfer_matches and not tool_matches:
+                        self.pending_chamfer.pop(operation_index,None)
+                        return {'verified':False,'outcome':'chamfer_saved_but_tool_parameters_need_reselection',
+                                'chamfer_settings_saved_verified':True,'operation':last,'expected_tool':pending,
+                                'required_action':'Reselect the intended V tool and regenerate from the path list, then verify all saved parameters',
+                                'simulation_verified':False,'machining_ready':False,'machine_commands_sent':False}
+                    if last['calculation_evidence_verified'] and chamfer_matches and (not old_ids or ids != old_ids) and tool_matches and tabs_match:
                         self.pending_tools.pop(operation_index,None)
                         self.pending_tabs.pop(operation_index,None)
+                        self.pending_chamfer.pop(operation_index,None)
                         return {'verified': True, 'operation': last, 'project_path': str(self.managed_project),
                                 'tab_settings_saved_verified': bool(tab_pending), 'tab_positions_verified': False,
                                 'requires_tool_reselection_after_detail_commit': bool(tab_pending),
@@ -782,6 +923,7 @@ class NativeStudio:
                 self.managed_project = project
                 self.pending_tools = {}
                 self.pending_tabs = {}
+                self.pending_chamfer = {}
                 return {"opened": True, "native_method": queued["method"], "path": str(project),
                         "state": state, "source": "native Qt slot + native property readback",
                         "existing_same_test_saved_before_reopen": same_project_saved}
@@ -789,6 +931,8 @@ class NativeStudio:
         return {"opened": False, "outcome": "queued_but_not_verified", "state": state}
 
     def set_stock(self, dimensions: dict) -> dict:
+        if self.pending_tabs or self.pending_chamfer:
+            raise RuntimeError('Commit or reopen pending detail edits before editing stock')
         if self.managed_project is None:
             raise RuntimeError("Open an isolated project with this MCP before modifying stock")
         state = self.read()

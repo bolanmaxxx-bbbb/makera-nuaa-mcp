@@ -89,17 +89,22 @@ def build_server(settings: Settings | None = None):
                               "native_stock_shape_material_dimensions_saved",
                               "native_single_model_placement_saved_matrix_verification",
                               "native_operation_catalog_classification", "native_3d_relief_calculation_and_verification",
+                              "native_2d_chamfer_calculation_and_verification",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
                               "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
                 "not_implemented": ["other_model_import_formats", "multi_model_and_general_transform_commit", "native_project_creation_save_as",
                                     "tool_group_creation", "other_tool_geometry_fields", "operation_reorder_copy_delete",
                                     "full_facing_to_thickness_workflow", "fixture_clearance_verification",
-                                    "task_stage_completion_commit", "2d_thread_and_chamfer_calculation",
+                                    "task_stage_completion_commit", "2d_thread_calculation",
                                     "3d_feature_contour_hole_edge_selection_and_calculation", "rotary_and_laser_calculation",
                                     "simulation_result_verification", "nc_postprocessing_verification",
                                     "direct_controller_telemetry", "machine_motion", "automatic_anomaly_classification"],
                 "operation_catalog_tool": "get_studio_operation_catalog",
+                "native_2d_chamfer_scope": {"geometry":"saved_svg_edges","tool":"existing_native_V_tool",
+                    "verified_tool_angles_deg":[90],
+                    "tool_registration":False,"depth_basis":"start + chamfer_depth + tip_offset",
+                    "stock_overcut_allowance":False},
                 "native_3d_relief_scope": {"single_model_single_mesh": True, "stock_shape": "box", "max_stock_thickness_mm": 10, "verified_tools": ["flat_endmill"]},
                 "studio_state": "Reads Qt object properties independently through a persistent native bridge; no expired UI snapshot dependency",
                 "integration_status": "Unofficial internal Qt adapter; executable fingerprint pinned; not a Makera public SDK",
@@ -168,6 +173,18 @@ def build_server(settings: Settings | None = None):
         return await anyio.to_thread.run_sync(studio.create_pocket, geometry_uuids, end_depth_mm)
 
     @server.tool(annotations=local_write)
+    async def create_2d_chamfer(geometry_uuids: list[str], chamfer_depth_mm: float) -> dict:
+        """Create/save 2D chamfer on SVG edges. chamfer_depth_mm is chamfer size with initial start=0, not absolute end Z. Defaults are not process approval. Select an existing 90-degree V tool and configure explicit parameters before generation; no machine commands."""
+        return await anyio.to_thread.run_sync(studio.create_chamfer, geometry_uuids, chamfer_depth_mm)
+
+    @server.tool(annotations=local_write)
+    async def configure_studio_2d_chamfer(operation_index: int, start_depth_mm: float, chamfer_depth_mm: float,
+                                         tip_offset_mm: float, side: str, direction: str, project_sha256: str) -> dict:
+        """Stage 2D chamfer details after V selection. Explicit side/direction, start depth, chamfer size, tip offset and fresh SHA. Native endDepth stores chamfer size, not absolute end Z. Generation commits and checks settings/motion; not simulation or machine execution."""
+        return await anyio.to_thread.run_sync(studio.configure_chamfer, operation_index, start_depth_mm, chamfer_depth_mm,
+                                              tip_offset_mm, side, direction, project_sha256)
+
+    @server.tool(annotations=local_write)
     async def set_studio_operation_depths(operation_index: int, start_depth_mm: float, end_depth_mm: float, through_cut_allowance_mm: float = 0) -> dict:
         """Commit 0 <= start < end <= 10 mm. Depth beyond stock requires an explicit 0..2 mm backing allowance; zero remains the default. Requires recalculation and does not change origin or move hardware."""
         return await anyio.to_thread.run_sync(studio.set_operation_depths, operation_index, start_depth_mm, end_depth_mm, through_cut_allowance_mm)
@@ -194,7 +211,7 @@ def build_server(settings: Settings | None = None):
 
     @server.tool(annotations=local_write)
     async def generate_studio_toolpath(operation_index: int) -> dict:
-        """Run native planar pocket/contour/drilling or single-model relief calculation and save. Verify new linked nonempty native vertex buffers and pending tool parameters; no machine commands. Does not certify simulation or machining safety."""
+        """Run native planar pocket/contour/drilling/chamfer or single-model relief calculation and save. Verify new linked nonempty native vertex buffers and pending tool/operation parameters; no machine commands. Does not certify simulation or machining safety."""
         return await anyio.to_thread.run_sync(studio.generate_toolpath, operation_index)
 
     @server.tool(annotations=local_write)

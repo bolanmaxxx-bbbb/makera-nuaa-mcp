@@ -90,9 +90,10 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         return {"ready": False, "calls": [], "job_checks": checked}
     catalog = audit(capabilities, tool_list)
     op = next((op for op in job["operations"] if op["id"] == operation_id), None)
-    if not op or op.get("kind") not in {"contour", "drill", "pocket", "relief_3d"} or op.get("execution_mode") == "manual":
-        raise ValueError("Only automatic native pocket/contour/drill/model-relief calls are implemented")
+    if not op or op.get("kind") not in {"contour", "drill", "pocket", "relief_3d", "chamfer"} or op.get("execution_mode") == "manual":
+        raise ValueError("Only automatic native pocket/contour/drill/chamfer/model-relief calls are implemented")
     is_relief = op["kind"] == "relief_3d"
+    is_chamfer = op["kind"] == "chamfer"
     if binding.get("job_revision") != job["revision"]:
         raise ValueError("Binding belongs to a different job revision")
     project = Path(binding["project_path"]).resolve(strict=True)
@@ -142,8 +143,10 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         if is_relief:
             call("create_3d_relief", {"model_uuid":geometry[0],"layered":relief["layered"],
                 "allowance_mm":relief["allowance_mm"],"project_sha256":digest})
+        elif is_chamfer:
+            call('create_2d_chamfer',{'geometry_uuids':geometry,'chamfer_depth_mm':op['chamfer']['depth_mm']})
         else:
-            call({"contour": "create_2d_contour", "drill": "create_2d_drilling", "pocket": "create_2d_pocket"}[op["kind"]],
+            call({"contour": "create_2d_contour", "drill": "create_2d_drilling", "pocket": "create_2d_pocket", "chamfer":"create_2d_chamfer"}[op["kind"]],
                  {"geometry_uuids": geometry, "end_depth_mm": min(depth, height)})
         call("get_studio_operations", {})
         return {"ready": True, "phase": "create_only", "calls": calls,
@@ -153,7 +156,7 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     saved = next((item for item in snapshot.get("operations", []) if item.get("index") == index), {})
     if binding.get("native_operation_id") is None or binding["native_operation_id"] != saved.get("id"):
         raise ValueError("Bind the actual saved native operation id, not only its current list index")
-    if saved.get("type") != {"pocket": 0, "contour": 1, "drill": 2, "relief_3d":6}[op["kind"]] or saved.get("geometry_uuids") != geometry:
+    if saved.get("type") != {"pocket": 0, "contour": 1, "drill": 2, "relief_3d":6, "chamfer":13}[op["kind"]] or saved.get("geometry_uuids") != geometry:
         raise ValueError("Saved native operation does not match the planned type/geometry")
     interval = saved.get("depth") or {}
     if is_relief and ((saved.get("relief_settings") or {}).get("finishing") != [not relief["layered"]] or (saved.get("relief_settings") or {}).get("machining_allowance") != [relief["allowance_mm"]]):
@@ -162,7 +165,7 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
         call("get_studio_operations", {})
         return {"ready":True,"phase":"relief_settings_only","calls":calls,
                 "next":"Verify model selection, layering/allowance and invalidation; refresh snapshot before tool selection"}
-    if not is_relief and (abs(interval.get("startDepth", -1) - start) > 0.000001 or abs(interval.get("endDepth", -1) - depth) > 0.000001):
+    if not is_relief and not is_chamfer and (abs(interval.get("startDepth", -1) - start) > 0.000001 or abs(interval.get("endDepth", -1) - depth) > 0.000001):
         arguments = {"operation_index": index, "start_depth_mm": start, "end_depth_mm": depth}
         if allowance:
             arguments["through_cut_allowance_mm"] = allowance
@@ -200,6 +203,15 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
          "name": native["name"], "material_profile": native["material_profile"]})
     # Selection is a checkpoint: compare expected_saved_tool_after_generation with the job first.
     after = []
+    if is_chamfer:
+        if native["mode"] != "select_existing":
+            raise ValueError("V tool registration is not verified; select an existing native V tool")
+        chamfer = op["chamfer"]
+        after.append({"tool":"configure_studio_2d_chamfer","arguments":{"operation_index":index,
+            "start_depth_mm":start,"chamfer_depth_mm":chamfer["depth_mm"],"tip_offset_mm":chamfer["tip_offset_mm"],
+            "side":chamfer["side"],"direction":chamfer["direction"],"project_sha256":digest}})
+        if not catalog["tools"]["configure_studio_2d_chamfer"]["available"]:
+            raise ValueError("Chamfer configuration unavailable in the current connection")
     tabs = op.get("tabs")
     if tabs:
         if op["kind"] != "contour" or not catalog["tools"]["configure_studio_contour_tabs"]["available"]:
@@ -214,7 +226,7 @@ def operation_calls(job, operation_id, binding, capabilities, tool_list):
     return {"ready": True, "phase": "configure_only", "calls": calls,
             "after_verification": after,
             "tabs_require_post_commit_tool_reselection": bool(tabs),
-            "next": "Compare selected expected parameters with this job before generating; inspect every result"}
+            "next": "Compare selected expected parameters with this job before generating; for chamfer also compare V angle/tip diameter and inspect staged settings before calculation"}
 
 
 def main():

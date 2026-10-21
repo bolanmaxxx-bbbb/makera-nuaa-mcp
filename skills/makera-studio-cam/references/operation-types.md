@@ -8,7 +8,7 @@
 | 二维铣削 | 轮廓 / 1 | 矢量边界；内/外/在线、补偿、进退刀、真实保留 | 内外轮廓与连接筋 | 已接通 |
 | 二维铣削 | 钻孔 / 2 | 矢量孔位；刀径、通盲、钻尖、啄钻与背面许可 | 孔阵列 | 已接通 |
 | 二维铣削 | 螺纹 / 9 | 矢量位置；螺纹铣刀、大径、螺距、内外/左右旋、底孔和有效牙深 | 内外螺纹样件 | 待适配 |
-| 二维铣削 | 倒角 / 13 | 矢量边；V刀角度/尖端、内外侧、尺寸与尖端偏移 | 内外倒角环 | 待适配 |
+| 二维铣削 | 倒角 / 13 | 矢量边；V刀角度/尖端、内外侧、尺寸与尖端偏移 | 矩形/圆边内外倒角 | 已接通90°V刀范围 |
 | 三维加工 | 浮雕 / 6 | 整体模型网格；摆放、分层/表面、深度余量、边界与行距 | 已验证闭合斜面与连续曲面 | 已接通受限范围 |
 | 三维加工 | 特征加工 / 7 | 模型面/特征；轴向/径向余量、粗精策略、残料 | 台阶型腔与岛 | 待适配 |
 | 三维加工 | 轮廓 / 8 | 模型或提取轮廓；两种引用区分、起止/结束偏移、内外侧、保留 | 台阶模型剪影 | 待适配 |
@@ -40,7 +40,19 @@ type来自当前兼容指纹下的Studio，不是跨版本协议。三维钻孔�
 
 调用辅助器支持kind=relief_3d，binding.geometry_uuids仅含实际模型mesh UUID；工序声明relief.layered及relief.allowance_mm。该辅助器中的depth_mm是可达性检查的计划最大深度预算，须覆盖模型最低点，不发送为二维切深；start_depth_mm须0且无through_cut_allowance_mm。其余截深需求报告为未支持。仍按创建、配置、选刀核对、生成分阶段执行。
 
-## 证据范围
+## v0.8.2二维倒角实际调用
+
+1. create_2d_chamfer(geometry_uuids, chamfer_depth_mm)创建SVG边倒角，初始start=0；选定后续实际90°V刀，核对直径、刃长、柄径、角度、尖端和五项速率/步距。当前只选择现有V刀，不注册V刀或支持其他角度。信息表不显示尖端直径，适配器会只读原生刀具编辑器后取消编辑，并在生成后的MKS再次核对，不能从刀名补值。
+2. configure_studio_2d_chamfer(index, start_depth_mm, chamfer_depth_mm, tip_offset_mm, side, direction, fresh_sha)暂存专用参数。side=inside/outside，direction=climb/conventional。参数回读verified只证明编辑器值，saved_verified仍为false；随后generate_studio_toolpath才提交计算和保存。
+3. 原生depth.endDepth在此工序表示**倒角量**；实际刀尖深度=start_depth_mm+chamfer_depth_mm+tip_offset_mm。非零start时不能使用普通工序的start<end或绝对结束Z解释。现有set_studio_operation_depths不接受type13；必须调用倒角专用配置。总刀尖深度不得超过10mm、毛坯或有效刃长；倒角量加端部偏移还须在有效锥刃内。当前不开放切入垫板余量。
+4. 详情计算可能把刀具stepOverMM写成零或无意义极小值。适配器保存预期刀具，即使只是修改已保存工序也会逐字段比较；返回chamfer_saved_but_tool_parameters_need_reselection时，先核对chamfer_settings_saved_verified，再重新select_studio_tool、从列表generate并检查完整保存参数。其他失败先检查现状，不自动新建重复工序。
+5. 原生保存的contourPosition是inside=1/outside=0，workDirection是climb=1/conventional=0；由原生单选项点击及实际刀路核对，不按枚举名字猜。保存重开后同时核对几何UUID、倒角量、方向、刀具和新运动。
+
+skill工序kind=chamfer只表示二维SVG边。工具记录kind=engraver、geometry=v、included_angle_deg=90、tip_diameter_mm；工序chamfer记录depth_mm、tip_offset_mm、side和direction。通用工序depth_mm是倒角下边界的绝对深度预算，须等于start_depth_mm+chamfer.depth_mm；helper仅把chamfer.depth_mm传为原生倒角量。先选刀核对，再暂存、计算、保存回读；三维边倒角不能借用此接口。
+
+validate_2d_chamfer_mcp.py通过真实STDIO MCP验证矩形/圆边、内外侧四组，以及非零起始深度、端部偏移、顺逆铣修订、旧SHA拒绝、新缓冲与保存重开。最终刀尖Z和解析边偏移均有采样证据，不能据此宣称完整去除/碰撞仿真、成品公差或NC已验收。
+
+## 已验证回归的证据范围
 
 validate_operation_inventory.py只复验14种空工序的原生type与保存。validate_3d_relief_mcp.py自行生成闭合斜面和连续曲面，通过真实STDIO MCP完成分层粗加工、表面加工、保存与重开，检查模型实际高度、内部XYZ变化段，并将采样刀尖点与已知解析面及刀具半径/曲面梯度的高度上界比较；只检查没有向下过切不能排除整体抬高或未切到表面。现场工程与报告留在cases，不进公开仓库。
 

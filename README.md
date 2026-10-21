@@ -2,7 +2,7 @@
 
 让 Codex 通过 MCP 直接调用 Makera Studio，逐步规划、生成并核对 CAM 结果。附带可复用的 `makera-studio-cam` 技能，支持引导推荐、可修改模板和自定义工艺流程。摄像头采样是辅助观测能力。
 
-当前版本 **0.8.1**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
+当前版本 **0.8.2**，处于开发验证阶段。采用 Windows 上的非官方原生 Qt/Frida 适配器，不依赖 Computer Use、截图、可访问性树或鼠标键盘模拟；不是 Makera 官方 API/SDK。
 
 ```text
 Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
@@ -21,6 +21,7 @@ Codex → STDIO MCP → Python / Frida RPC → Studio Qt 主线程
 | 注册刀具尺寸/材料参数、编辑器选刀 | 已验证；选刀参数在生成刀路时提交 |
 | 创建 2D 轮廓和钻孔工序 | 已验证 |
 | 创建 2D 区域清理/平面型腔 | 已验证；原生工序类型0，使用选定SVG区域 |
+| 二维倒角 | 已验证受限范围；SVG边、现有90°V刀、内外侧和顺逆铣、独立倒角量/端部偏移、修订与保存重开 |
 | 修改平面工序起止深度 | 已验证；保存回读，修改后重新计算 |
 | 原生计算、实际参数及运动顶点回读 | 已验证；钻孔另检查逐次退屑序列 |
 | 任务记录、输入检查和修订管理 | 已实现 |
@@ -106,7 +107,7 @@ $makera-studio-cam
 
 从 `assets/job-template.json` 建立任务记录，字段及阶段含义见技能引用文档。校验器检查记录一致性，尚未嵌入底层 MCP 强制拦截，也不代替几何检查、仿真或现场测量。
 
-技能已为当前39个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
+技能已为当前41个MCP工具建立路由，覆盖项目/CAM、任务创建与修订、原生诊断、视频采样、事件及本地证据导出、NC文本检查。`scripts/mcp_workflow.py`提供`audit`、`task-spec`和`operation-calls`三个子命令，核对实际连接并把技能记录映射成接口参数；它只输出JSON，不自动调用工具。创建、深度调整及配置选刀分阶段，真实index和文件哈希匹配后才继续；选刀参数必须核对后再生成。详见技能的`references/task-and-payloads.md`。
 
 ## 软件验证流程
 
@@ -188,3 +189,15 @@ set_studio_operation_depths新增through_cut_allowance_mm（默认0，范围0～
 ### v0.8.1：模型Z位置回读修复
 
 模型移动改为选中模型后进入实际原生移动工具，确认编辑器可见并真正选中中心锚点，修复调用成功但Z仍停在旧位置的情况。回归新增仅改变Z、重复移动和保存重开；三维案例先完成毛坯配置再定位，并同时核对解析面的高度下界与上界。模型Z仍是软件毛坯坐标，不代替现场测厚、工件Z基准或机床位置。
+
+### v0.8.2：二维倒角与专用深度语义
+
+新增create_2d_chamfer和configure_studio_2d_chamfer，配合现有V刀选择、计算、保存和重开，工具总数41。矩形与圆边的内外侧四组案例已通过实际STDIO MCP回归；90°V刀最低刀尖Z及边偏移均对照解析几何检查，另验证非零起始深度、参数修改、旧SHA拒绝和刀具参数重新提交。
+
+倒角原生endDepth是倒角量，不是普通轮廓的绝对结束深度。接口显式使用chamfer_depth_mm，刀尖深度为start_depth_mm+chamfer_depth_mm+tip_offset_mm；现有绝对深度接口不接受倒角。详情计算可能改写刀具步距，必须比较完整保存参数，必要时重新选刀并从列表重算。V刀角度和尖端数据从原生刀具编辑器只读提取、取消编辑，再核对计算后的实际保存值；不根据刀名推算。
+
+```powershell
+& .\.venv\Scripts\python.exe -X utf8 .\scripts\validate_2d_chamfer_mcp.py --project <自备无工序无3D模型的MKS> --output-directory cases/倒角验证 --tool-group <现有刀具组> --tool-name <现有90度V刀名> --material-profile <真实材料标签>
+```
+
+当前仍不支持V刀注册、其他角度的自动倒角、三维边倒角、仿真结果验收或NC后处理。案例参数只用于软件回归，不作为实际材料切削推荐。

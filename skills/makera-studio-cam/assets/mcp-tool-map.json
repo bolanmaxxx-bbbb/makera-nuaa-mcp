@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "validated_server_version": "0.8.1",
+  "validated_server_version": "0.8.2",
   "tools": [
     {"name":"get_capabilities","route":"discovery","reference":"references/mcp-execution.md","requires":[]},
     {"name":"connect_studio","route":"project","reference":"references/mcp-execution.md","requires":["native_studio_connection"]},
@@ -40,6 +40,8 @@
     {"name":"inspect_nc_file","route":"nc","reference":"references/observation-and-nc.md","requires":["lexical_nc_inspection"]},
     {"name":"get_studio_operation_catalog","requires":["native_operation_catalog_classification"],"route":"operation_classification","reference":"references/operation-types.md"},
     {"name":"create_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_creation","reference":"references/operation-types.md"},
-    {"name":"configure_studio_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_configuration","reference":"references/operation-types.md"}
+    {"name":"configure_studio_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_configuration","reference":"references/operation-types.md"},
+    {"name":"create_2d_chamfer","requires":["native_2d_chamfer_calculation_and_verification"],"route":"planar_chamfer_creation","reference":"references/operation-types.md"},
+    {"name":"configure_studio_2d_chamfer","requires":["native_2d_chamfer_calculation_and_verification"],"route":"planar_chamfer_configuration","reference":"references/operation-types.md"}
   ]
 }

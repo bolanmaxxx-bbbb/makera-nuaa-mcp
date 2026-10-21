@@ -9,7 +9,7 @@ description: 使用 Makera/造物时代 Studio MCP 规划与执行CAM任务（�
 
 ## 工具入口与能力核对
 
-先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的39个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
+先调用当前连接的get_capabilities并核对实际暴露工具。使用[工具路由表](assets/mcp-tool-map.json)和`scripts/mcp_workflow.py audit`检查覆盖；它为已验证版本的41个工具提供入口，不要求每个任务调用所有工具。工具出现但能力声明缺失、旧进程或新增未知工具时，先澄清该连接能力，不从磁盘版本推断可执行。
 
 - 项目、毛坯、几何、刀具、区域清理/轮廓/钻孔、起止深度、计算保存、原生状态/方法诊断：读[MCP执行与验收](references/mcp-execution.md)。
 - 导入STL/SVG、选择方形/圆棒毛坯或材料/规格时，使用同一参考中的v0.6流程。用户询问其他功能或扩展工作流时读[能力覆盖清单](references/capability-coverage.md)，不要把规划选项当作已接通能力。
@@ -20,6 +20,8 @@ description: 使用 Makera/造物时代 Studio MCP 规划与执行CAM任务（�
 - 用户请求加工点测厚或选择探头高度差测量时：读[加工点局部测厚](references/thickness-measurement.md)，按用户选定的裸露垫板基准测点与加工点顶面规划，校核异地垫板高度传递、垫层、重复性和记录；不由测厚规划推断已有设备执行能力。
 
 - 用户询问全部工序、选择策略或需要三维CAM时：读[十四种原生工序](references/operation-types.md)，用get_studio_operation_catalog区分二维、三维、旋转与激光。三维浮雕已接通单模型/平底刀受限范围，其余面/边/孔工序分别判断，不以浮雕或整体网格代替。
+
+二维倒角已验证现有90°V刀的受限范围，详见工序分类。使用独立倒角量及端部偏移，不把原生endDepth当作绝对结束深度；详情计算后须核对并视需要重新提交完整刀具参数。三维边倒角仍单独判断，不能由二维能力推断。
 
 ## 1. 判断当前请求
 

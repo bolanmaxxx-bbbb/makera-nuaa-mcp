@@ -14,7 +14,7 @@ CAPABILITIES = {
     "engrave": "native_surface_engraving",
     "pocket": "native_pocket_calculation_and_verification",
     "relief_3d": "native_3d_relief_calculation_and_verification",
-    "chamfer": "native_chamfer_calculation_and_verification",
+    "chamfer": "native_2d_chamfer_calculation_and_verification",
 }
 GROUPS = ["task", "stock", "length", "tools", "process", "confirmation", "capability", "evidence"]
 
@@ -280,6 +280,33 @@ def validate_job(job, stage="plan", capabilities=None, evidence=None):
                 issue("tool_kind", prefix, "钻孔工序不能使用未确认类型的刀具", "tools")
             if op_kind != "drill" and tool.get("kind") not in {"endmill", "engraver"}:
                 issue("tool_kind", prefix, "铣削/雕刻工序需要对应的刀具类型", "tools")
+            if op_kind == "chamfer":
+                chamfer = op.get("chamfer", {})
+                if not isinstance(chamfer,dict):
+                    chamfer = {}
+                if chamfer.get("side") not in {"inside","outside"} or chamfer.get("direction") not in {"climb","conventional"}:
+                    issue("chamfer_strategy", prefix + ".chamfer", "明确内外侧和顺逆铣", "process")
+                tip_offset,angle,tip = chamfer.get("tip_offset_mm"),tool.get("included_angle_deg"),tool.get("tip_diameter_mm")
+                if not number(tip_offset) or tip_offset>2:
+                    issue("chamfer_tip_offset", prefix + ".chamfer.tip_offset_mm", "明确0到2mm端部偏移", "process")
+                chamfer_depth = chamfer.get('depth_mm')
+                if not number(chamfer_depth,positive=True) or (number(op.get('depth_mm')) and number(op.get('start_depth_mm',0)) and number(chamfer_depth) and abs(op['depth_mm']-op.get('start_depth_mm',0)-chamfer_depth)>1e-6):
+                    issue('chamfer_depth_basis',prefix+'.chamfer.depth_mm','明确倒角深度；工序depth_mm须等于start_depth_mm加倒角深度，不直接传为原生endDepth','process')
+                if tool.get("kind") != "engraver" or tool.get("geometry") != "v" or not number(angle,positive=True) or angle>=180 or not number(tip) or (number(tool.get("diameter_mm")) and tip>=tool["diameter_mm"]):
+                    issue("chamfer_tool", prefix, "倒角需V刀及有效夹角、尖端直径", "tools")
+                elif abs(angle-90)>1e-6:
+                    issue('chamfer_tool_scope',prefix,'当前已验证倒角接口仅接受90度V刀；其他角度待独立验证','tools')
+                elif all(number(v) for v in (tip_offset,op.get("depth_mm"),op.get("start_depth_mm",0),tool.get("flute_length_mm"),tool.get("diameter_mm"))):
+                    cone = (tool["diameter_mm"]-tip)/(2*math.tan(math.radians(angle/2)))
+                    if op["depth_mm"]-op.get("start_depth_mm",0)+tip_offset>min(cone,tool["flute_length_mm"])+1e-8:
+                        issue("chamfer_tool_reach", prefix, "倒角深度加端部偏移超过有效锥刃", "tools")
+                    if op['depth_mm']+tip_offset>tool['flute_length_mm']+1e-8:
+                        issue('chamfer_flute_reach',prefix,'起始深度、倒角量和端部偏移总和超过有效刃长','tools')
+                    nominal_height = stock.get("nominal_mm",{}).get("z")
+                    if number(nominal_height) and op["depth_mm"]+tip_offset>nominal_height:
+                        issue("chamfer_stock_depth", prefix, "倒角刀尖深度超过毛坯", "process")
+                if op.get("through_cut_allowance_mm",0):
+                    issue("chamfer_overcut", prefix, "当前倒角接口不支持穿透垫板余量", "process")
             depth, reach = op.get("depth_mm"), tool.get("flute_length_mm")
             start_depth = op.get("start_depth_mm", 0)
             if not number(start_depth) or (number(depth, positive=True) and start_depth >= depth):

@@ -6,9 +6,9 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.8.1；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.8.2；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整39工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整41工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 
@@ -24,6 +24,7 @@
 | 选刀 | select_studio_tool | 编辑器匹配；工具参数在生成时提交，尚不代表已保存 |
 | 创建轮廓/钻孔 | create_2d_contour / create_2d_drilling | 几何UUID、区域尺寸、切深、工序类型匹配 |
 | 创建平面区域清理 | create_2d_pocket | 原生type=0；起始0、指定结束深度、SVG选区及默认平底刀需回读；不能冒充完整面铣定厚 |
+| 二维倒角 | create_2d_chamfer / configure_studio_2d_chamfer | SVG边、现有90°V刀；显式起始深度、倒角量、端部偏移和内外/顺逆铣；暂存不等于保存，计算后核对刀具及chamfer_settings，再保存重开 |
 | 修改平面起止深度 | set_studio_operation_depths | 支持type0/1/2，默认0≤start<end≤min(10,毛坯厚度)，显式垫板余量可扩展结束深度，保存回读后必须重新计算 |
 | 生成并提交 | generate_studio_toolpath | verified=true；本修订的实际刀具参数、非空运动路径及保存文件核对 |
 | 读取工序证据 | get_studio_operations | 比较live与saved，不能互相代替 |
@@ -87,3 +88,5 @@
 8. 配置成功必须检查`verified`和`saved_stock`。失败且返回`rolled_back`时再检查`rollback_saved_verified`；回滚不完整时停止依赖它的写入并保留现状。毛坯或模型变化需增加任务修订号，作废受影响的刀路、仿真及NC证据，重新检查深度、覆盖和夹具净空。
 
 材料名称不证明材料切削参数适用。源几何、软件摆放、毛坯名义值、现场实测、工件基准和机床偏置分别记录。v0.7的单模型摆放范围、实际留料及重开核对见[几何摆放与留件验收](geometry-and-retention.md)；其余未验证变换、STEP等格式及未适配三维工序不借任意Qt槽补齐。v0.8已接通的模型浮雕及其专属限制见[工序分类](operation-types.md)。其余开发项见[能力覆盖清单](capability-coverage.md)。
+
+自动恢复或打开工程失败时，先保留可恢复的原始数据及哈希，再检查恢复副本能否实际打开和保留工序；恢复按钮排队成功不等于工程已恢复。当前MCP未暴露通用弹窗确认，未知提示不能自动丢弃。

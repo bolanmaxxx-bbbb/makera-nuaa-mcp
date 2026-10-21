@@ -383,6 +383,37 @@ rpc.exports = {
     if(editors.length!==1||!activeModal().isNull())throw new Error('Expected visible contour detail page');
     return {queued:queueMethod(ptr(editors[0].pointer),'on_btnMainCalculate_released',[],2)};
   });},
+  configureChamferDetails(hwnd,startDepth,endDepth,tipOffset,side,direction){return onGui(hwnd,()=>{
+    if(!activeModal().isNull()||![startDepth,endDepth,tipOffset].every(Number.isFinite)||startDepth<0||endDepth<=0||startDepth+endDepth+tipOffset>10||tipOffset<0||tipOffset>2||!['inside','outside'].includes(side)||!['climb','conventional'].includes(direction))throw new Error('Invalid chamfer settings');
+    const found=treeOf(rootOf(hwnd)).filter(o=>o.type==='Chamfer2DPathWgt'&&visible(ptr(o.pointer)));
+    if(found.length!==1)throw new Error('Expected visible 2D chamfer detail page');
+    const objects=treeOf(ptr(found[0].pointer));
+    const one=name=>{const rows=objects.filter(o=>o.name===name);if(rows.length!==1)throw new Error('Missing chamfer field '+name);return ptr(rows[0].pointer);};
+    const fields={lineEdit_start_depth_2:startDepth,lineEdit_end_depth_2:endDepth,lineEdit_finish_2:tipOffset},targets=[];
+    for(const [name,value] of Object.entries(fields)){
+      const wrapper=one(name),spins=childObjects(wrapper).filter(p=>isA(p,'QDoubleSpinBox'));
+      if(spins.length!==1||value<spinMin(spins[0])||value>spinMax(spins[0]))throw new Error('Chamfer value outside native field range');
+      const scale=10**spinDecimals(spins[0]);
+      if(Math.abs(value*scale-Math.round(value*scale))>1e-6)throw new Error('Chamfer value is not representable at native precision');
+      targets.push({name,wrapper,spin:spins[0],value});
+    }
+    const sideButton=one(side==='inside'?'radioButton_in_2':'radioButton_out_2'),directionButton=one(direction==='climb'?'radioButton_climb_3':'radioButton_conventional_3');
+    if(![sideButton,directionButton].every(p=>isA(p,'QRadioButton')&&enabled(p)))throw new Error('Chamfer choices unavailable');
+    const invoked=[];
+    // Clear the old start first, avoiding transient start>end constraints.
+    invoked.push(queueMethod(targets[0].spin,'setValue',[{type:'double',value:0}],1));
+    for(const target of [targets[1],targets[0],targets[2]]){
+      invoked.push(queueMethod(target.spin,'setValue',[{type:'double',value:target.value}],1));
+      invoked.push(queueMethod(target.wrapper,'editingFinished',[],1));
+    }
+    invoked.push(queueMethod(sideButton,'click',[],1),queueMethod(directionButton,'click',[],1));
+    return {invoked,readback:Object.fromEntries(targets.map(t=>[t.name,spinValue(t.spin)])),choices_checked:[sideButton,directionButton].every(p=>buttonChecked(p))};
+  });},
+  calculateChamferDetails(hwnd){return onGui(hwnd,()=>{
+    const found=treeOf(rootOf(hwnd)).filter(o=>o.type==='Chamfer2DPathWgt'&&visible(ptr(o.pointer)));
+    if(found.length!==1||!activeModal().isNull())throw new Error('Expected visible 2D chamfer details');
+    return {queued:queueMethod(ptr(found[0].pointer),'on_btnMainCalculate_clicked',[],2)};
+  });},
   openOperationDetails(hwnd,index){return onGui(hwnd,()=>{
     const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
     if(!Number.isInteger(index)||index<0||index>=paths.length||!activeModal().isNull())throw new Error('Operation unavailable or dialog active');
@@ -460,6 +491,22 @@ rpc.exports = {
     if(ok.length!==1||!enabled(ptr(ok[0].pointer)))throw new Error('Native tool editor validation is not satisfied');
     return {queued:queueMethod(modal,'on_pushButton_ok_released')};
   });},
+  readVToolGeometry(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();if(modal.isNull()||classOf(modal)!=='CutterEditDlg')throw new Error('Expected native tool editor');
+    const objects=treeOf(modal),one=name=>{const found=objects.filter(o=>o.name===name);if(found.length!==1)throw new Error('Missing V tool field '+name);return ptr(found[0].pointer);};
+    if(comboIndex(one('comboBox'))!==2)throw new Error('Expected native V tool type');
+    const result={};
+    for(const [key,name] of Object.entries({angle:'lineEdit_angle',tipDiameter:'lineEdit_tip_diameter'})){
+      const spins=childObjects(one(name)).filter(p=>isA(p,'QDoubleSpinBox'));
+      if(spins.length!==1||!Number.isFinite(spinValue(spins[0])))throw new Error('Invalid V tool geometry field');
+      result[key]=spinValue(spins[0]);
+    }
+    return result;
+  });},
+  cancelToolEdit(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();if(modal.isNull()||classOf(modal)!=='CutterEditDlg')throw new Error('Expected native tool editor');
+    return {queued:queueMethod(modal,'on_pushButton_cancel_released')};
+  });},
   selectToolGroup(hwnd,name){return onGui(hwnd,()=>{
     const modal=activeModal();if(modal.isNull()||classOf(modal)!=='CutterLibWgt')throw new Error('Expected tool library');
     const trees=treeOf(modal).filter(o=>o.name==='treeWidget'&&isA(ptr(o.pointer),'QTreeWidget'));
@@ -521,7 +568,7 @@ rpc.exports = {
       })};
   });},
   configureContour(hwnd,index,uuids,endDepth,kind){return onGui(hwnd,()=>{
-    if(!['contour','drilling','pocket'].includes(kind))throw new Error('Unsupported planar operation kind');
+    if(!['contour','drilling','pocket','chamfer'].includes(kind))throw new Error('Unsupported planar operation kind');
     if(!Number.isInteger(index)||index<0||!Array.isArray(uuids)||!uuids.length||uuids.length>50||uuids.some(s=>typeof s!=='string'||!/^[A-Za-z0-9-]{36}$/.test(s)))throw new Error('Invalid path or geometry identifiers');
     if(!Number.isFinite(endDepth)||endDepth<=0||endDepth>10)throw new Error('Invalid test contour depth');
     const root=rootOf(hwnd),paths=treeOf(root).filter(o=>o.type==='KnifePathDragWdg');
@@ -639,7 +686,7 @@ rpc.exports = {
       else if(isA(p,'QLineEdit'))value=getText(p,lineText);
       let options;
       if(isA(p,'QComboBox')){options=[];for(let i=0;i<comboCount(p);i++){const s=Memory.alloc(8);comboItemText(p,s,i);try{options.push(readQString(s));}finally{destroyQString(s);}}}
-      return {...o,value,options,checked:isA(p,'QCheckBox')?buttonChecked(p):undefined,enabled:enabled(p),methods:methodsOf(p)};
+      return {...o,value,options,checked:isA(p,'QAbstractButton')?buttonChecked(p):undefined,enabled:enabled(p),methods:methodsOf(p)};
     })};
   });},
   identity(){return {executable:Process.getModuleByName('MakeraStudio.exe').path,architecture:Process.arch,qt_core:core.path,backend:'native_qt'};},

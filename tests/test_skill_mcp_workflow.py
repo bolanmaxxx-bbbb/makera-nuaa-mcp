@@ -33,7 +33,7 @@ WORKFLOW = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WORKFLOW)
 CATALOG = json.loads((SKILL / "assets/mcp-tool-map.json").read_text(encoding="utf-8"))
 NAMES = [item["name"] for item in CATALOG["tools"]]
-CAPS = {"version": "0.8.0", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
+CAPS = {"version": "0.8.2", "supported": sorted({cap for item in CATALOG["tools"] for cap in item["requires"]} | {"native_explicit_through_cut_allowance"})}
 GEOMETRY = "12345678-1234-1234-1234-123456789abc"
 
 
@@ -157,6 +157,49 @@ class WorkflowPayloadTests(unittest.TestCase):
         self.job["tools"][0]["kind"] = "drill"
         self.assertEqual(self.calls()["calls"][0]["tool"], "create_2d_drilling")
 
+    def chamfer_job(self):
+        self.job['operations'][0].update(kind='chamfer',chamfer={'depth_mm':.5,'tip_offset_mm':.2,'side':'outside','direction':'climb'})
+        self.job['tools'][0].update(kind='engraver',geometry='v',diameter_mm=3.175,included_angle_deg=90,tip_diameter_mm=.1)
+        self.binding['tool']['mode'] = 'select_existing'
+
+    def test_chamfer_requires_capability_not_just_schemas(self):
+        self.chamfer_job()
+        caps = {**CAPS,'supported':[c for c in CAPS['supported'] if c!='native_2d_chamfer_calculation_and_verification']}
+        result = self.calls(caps=caps)
+        self.assertFalse(result['ready'])
+        self.assertEqual(result['calls'],[])
+
+    def test_chamfer_creation_and_configuration_follow_selection_checkpoint(self):
+        self.chamfer_job()
+        self.assertEqual(self.calls()['calls'][0]['tool'],'create_2d_chamfer')
+        self.configured(kind=13)
+        result = self.calls()
+        self.assertEqual([c['tool'] for c in result['calls']],['select_studio_tool'])
+        self.assertEqual(result['after_verification'][0]['tool'],'configure_studio_2d_chamfer')
+        self.assertEqual(result['after_verification'][1]['tool'],'generate_studio_toolpath')
+        self.assertEqual(result['after_verification'][0]['arguments']['project_sha256'],self.binding['project_snapshot']['sha256'])
+
+    def test_chamfer_missing_angle_or_unusable_cone_blocks_helper(self):
+        self.chamfer_job()
+        self.job['tools'][0]['included_angle_deg'] = None
+        self.assertFalse(self.calls()['ready'])
+        self.job['tools'][0]['included_angle_deg'] = 90
+        self.job['operations'][0]['chamfer']['tip_offset_mm'] = 2
+        self.assertFalse(self.calls()['ready'])
+
+    def test_chamfer_size_is_separate_from_absolute_budget_and_generic_depth_setter(self):
+        self.chamfer_job()
+        self.job['operations'][0].update(start_depth_mm=.2,depth_mm=.5)
+        self.job['operations'][0]['chamfer']['depth_mm'] = .3
+        self.configured(kind=13)
+        result = self.calls()
+        args = result['after_verification'][0]['arguments']
+        self.assertEqual(args['chamfer_depth_mm'],.3)
+        self.assertEqual(args['start_depth_mm'],.2)
+        self.assertNotIn('end_depth_mm',args)
+        self.job['operations'][0]['chamfer']['depth_mm'] = .5
+        self.assertFalse(self.calls()['ready'])
+
     def test_pocket_creation_and_explicit_depth_changes_are_separate_phases(self):
         self.job["operations"][0]["kind"] = "pocket"
         self.assertEqual(self.calls()["calls"][0]["tool"], "create_2d_pocket")
@@ -240,12 +283,32 @@ class WorkflowPayloadTests(unittest.TestCase):
                         audited = WORKFLOW.audit(capabilities, [tool.model_dump() for tool in tools])
                         self.assertTrue(audited["full_catalog_available"])
                         self.assertTrue(audited["all_exposed_tools_routed"])
-                        self.assertEqual(audited["covered_count"], len(CATALOG["tools"]))
+                        self.assertEqual(audited["covered_count"], len(tools))
+                        self.assertEqual(audited['covered_count'],len(CATALOG['tools']))
                         for call in packets["calls"] + packets["after_verification"]:
                             jsonschema.validate(call["arguments"], schemas[call["tool"]])
                 anyio.run(verify)
             finally:
                 camera.stop()
+
+    def test_chamfer_schemas_and_capability_cover_staged_helper_packets(self):
+        with tempfile.TemporaryDirectory() as folder:
+            server,camera = build_server(Settings(Path(folder)))
+            try:
+                async def verify():
+                    async with create_connected_server_and_client_session(server) as client:
+                        schemas = {t.name:t.inputSchema for t in (await client.list_tools()).tools}
+                        self.assertIn('create_2d_chamfer',schemas)
+                        self.assertIn('configure_studio_2d_chamfer',schemas)
+                        caps = json.loads((await client.call_tool('get_capabilities',{})).content[0].text)
+                        self.assertEqual(caps['native_2d_chamfer_scope']['verified_tool_angles_deg'],[90])
+                        self.assertIn('native_2d_chamfer_calculation_and_verification',caps['supported'])
+                        self.chamfer_job(); self.configured(kind=13)
+                        packets = self.calls()
+                        for call in packets['calls']+packets['after_verification']:
+                            jsonschema.validate(call['arguments'],schemas[call['tool']])
+                anyio.run(verify)
+            finally: camera.stop()
 
 
 class MCPAuxiliaryIntegrationTests(unittest.TestCase):

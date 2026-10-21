@@ -84,6 +84,10 @@ class ReliefNativeTests(unittest.TestCase):
         catalog=operation_catalog(labels+['Unknown future strategy'])
         self.assertEqual(len(catalog['operations']),14)
         self.assertEqual(len({row['native_type'] for row in catalog['operations']}),14)
+        self.assertEqual(sum(row['mcp_calculation_supported'] for row in catalog['operations']),5)
+        chamfer = next(row for row in catalog['operations'] if row['native_type']==13)
+        self.assertEqual(chamfer['mcp_creation_tool'],'create_2d_chamfer')
+        self.assertIn('90-degree',chamfer['boundary'])
         self.assertEqual(catalog['unknown_native_labels'],['Unknown future strategy'])
         for row in catalog['operations']:
             if row['id'] in ('feature_3d','rotary_relief','laser_image','thread_2d'):
