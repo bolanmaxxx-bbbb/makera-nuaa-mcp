@@ -145,6 +145,7 @@ def inspect_project(path: str) -> dict:
                         ('finishing','machining_allowance','bounding','bound_offset','pocket_strategy','parallel_angle','path_direction','toolcontainment','safe')}
                         if native_path.get('type') == 6 else None),
                     'tab_settings': native_path.get('tab'),
+                    'contour_position': native_path.get('contourPosition') if native_path.get('type') == 1 else None,
                     'chamfer_settings': ({key:native_path.get(key) for key in
                         ('chamferTipOffset','contourPosition','workDirection')}
                         if native_path.get('type') == 13 else None),

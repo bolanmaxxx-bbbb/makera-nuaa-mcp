@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
-  "validated_server_version": "0.8.3",
+  "validated_server_version": "0.9.0",
   "tools": [
+    {"name":"set_studio_svg_layout_position","route":"project","reference":"references/geometry-and-retention.md","requires":["native_svg_layout_xy_translation_saved_verification"]},
     {"name":"get_capabilities","route":"discovery","reference":"references/mcp-execution.md","requires":[]},
     {"name":"connect_studio","route":"project","reference":"references/mcp-execution.md","requires":["native_studio_connection"]},
+    {"name":"create_studio_project","route":"project","reference":"references/mcp-execution.md","requires":["native_empty_3_axis_project_creation"]},
     {"name":"open_studio_project","route":"project","reference":"references/mcp-execution.md","requires":["native_project_open"]},
     {"name":"set_stock_dimensions","route":"project","reference":"references/mcp-execution.md","requires":["native_stock_dimensions_and_commit"]},
     {"name":"get_studio_stock_options","route":"project","reference":"references/mcp-execution.md","requires":["native_stock_catalog_readback"]},
@@ -37,12 +39,15 @@
     {"name":"set_task_context","route":"evidence","reference":"references/observation-and-nc.md","requires":["task_context"]},
     {"name":"list_visual_events","route":"evidence","reference":"references/observation-and-nc.md","requires":[]},
     {"name":"export_event_evidence","route":"evidence","reference":"references/observation-and-nc.md","requires":["local_evidence_export"]},
-    {"name":"inspect_nc_file","route":"nc","reference":"references/observation-and-nc.md","requires":["lexical_nc_inspection"]},
+    {"name":"inspect_nc_file","route":"nc","reference":"references/observation-and-nc.md","requires":["lexical_nc_inspection","nc_ordered_shutdown_and_modal_feed_diagnostics"]},
     {"name":"get_studio_operation_catalog","requires":["native_operation_catalog_classification"],"route":"operation_classification","reference":"references/operation-types.md"},
     {"name":"create_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_creation","reference":"references/operation-types.md"},
     {"name":"configure_studio_3d_relief","requires":["native_3d_relief_calculation_and_verification"],"route":"model_relief_configuration","reference":"references/operation-types.md"},
     {"name":"create_2d_chamfer","requires":["native_2d_chamfer_calculation_and_verification"],"route":"planar_chamfer_creation","reference":"references/operation-types.md"},
     {"name":"configure_studio_2d_chamfer","requires":["native_2d_chamfer_calculation_and_verification"],"route":"planar_chamfer_configuration","reference":"references/operation-types.md"},
-    {"name":"register_studio_inventory_tool","requires":["native_tool_inventory_geometry_without_cutting_profiles"],"route":"tool_inventory","reference":"references/mcp-execution.md"}
+    {"name":"register_studio_inventory_tool","requires":["native_tool_inventory_geometry_without_cutting_profiles"],"route":"tool_inventory","reference":"references/mcp-execution.md"},
+    {"name":"set_studio_contour_position","route":"cam","reference":"references/mcp-execution.md","requires":["native_2d_contour_position_saved_verification"]},
+    {"name":"set_studio_operation_geometry","route":"cam","reference":"references/mcp-execution.md","requires":["native_planar_operation_geometry_rebinding"]},
+    {"name":"audit_saved_toolpath","route":"motion_review","reference":"references/path-efficiency-and-shutdown.md","requires":["saved_motion_reciprocation_audit"]}
   ]
 }

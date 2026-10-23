@@ -8,6 +8,7 @@ import math
 import re
 import threading
 import time
+import zipfile
 from ctypes import wintypes
 from pathlib import Path
 
@@ -115,6 +116,71 @@ class NativeStudio:
             self._require_managed()
             return self._call('stock_options')
 
+    def place_svg_layout(self, center_mm: dict, project_sha256: str) -> dict:
+        """Translate all planar SVG shapes together; never move the machine or 3D model."""
+        with self.lock:
+            self._require_managed()
+            if (not isinstance(center_mm, dict) or set(center_mm) != {'x', 'y'}
+                    or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in center_mm.values())):
+                raise ValueError('center_mm requires finite x/y only')
+            if not isinstance(project_sha256, str) or not re.fullmatch(r'[a-f0-9]{64}', project_sha256):
+                raise ValueError('Expected a fresh saved project SHA256')
+            if self.pending_tools or self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit or reopen pending CAM settings before placement')
+            before = inspect_project(str(self.managed_project))
+            if before['sha256'] != project_sha256:
+                raise ValueError('Project changed; refresh placement snapshot')
+            shapes = before['svg_geometry']; stock = before['stock']
+            if not shapes or stock.get('StockShape') != 1:
+                raise ValueError('SVG layout placement requires planar SVG and rectangular stock')
+            identity = [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
+            for shape in shapes:
+                matrix = shape['node_matrix_column_major']
+                if (len(matrix) != 16 or any(not math.isfinite(v) for v in matrix)
+                        or any(abs(v-identity[i]) > 1e-5 for i,v in enumerate(matrix) if i not in (12,13))
+                        or shape['z_levels_mm'] != [0]):
+                    raise ValueError('Only unscaled axis-aligned planar SVG translations are supported')
+            bounds = {axis: [min(s['bounds_in_serialized_coordinates_mm'][axis][0]+s['node_matrix_column_major'][12+i] for s in shapes),
+                             max(s['bounds_in_serialized_coordinates_mm'][axis][1]+s['node_matrix_column_major'][12+i] for s in shapes)] for i,axis in enumerate('xy')}
+            delta = [center_mm[a]-sum(bounds[a])/2 for a in 'xy']
+            for i,(axis,limit) in enumerate(zip('xy',('length','width'))):
+                size=stock.get(limit)
+                if not isinstance(size,(int,float)) or not math.isfinite(size) or size <= 0 or bounds[axis][0]+delta[i] < -1e-4 or bounds[axis][1]+delta[i] > size+1e-4:
+                    raise ValueError('Requested SVG layout extends outside stock')
+            with zipfile.ZipFile(self.managed_project) as archive:
+                coords=json.loads(archive.read('makera.prj'))['project'].get('lstCoordinate',{})
+            if len(coords) != 1:
+                raise ValueError('Exactly one coordinate system is supported')
+            layers=next(iter(coords.values())).get('images',[])
+            ids=[layer.get('id') for layer in layers]
+            if (not ids or len(ids)>50 or any(layer.get('type') != 1 for layer in layers)
+                    or any(isinstance(v,bool) or not isinstance(v,int) or v<0 for v in ids) or len(set(ids)) != len(ids)):
+                raise ValueError('Expected unique planar layer IDs only')
+            if self._call('path_summary')['modal_type']:
+                raise RuntimeError('Resolve current dialog before placement')
+            baseline=self.save_project()
+            if not baseline.get('saved') or any(baseline['project'].get(k)!=before.get(k) for k in ('svg_geometry','models_3d','stock','operations')):
+                raise RuntimeError('Unsaved changes saved; refresh snapshot before placement')
+            native=self._call('place_svg_layout',ids,[center_mm[a] for a in 'xy'])
+            saved=self.save_project();after=saved.get('project',{})
+            moved=after.get('svg_geometry',[])
+            matches=len(moved)==len(shapes)
+            by_id={s['uuid']:s for s in moved}
+            for old in shapes:
+                new=by_id.get(old['uuid'],{})
+                matches=matches and all(new.get(k)==old.get(k) for k in ('kind','vertex_count','bounds_in_serialized_coordinates_mm','z_levels_mm'))
+                matrix=new.get('node_matrix_column_major',[])
+                expected=list(old['node_matrix_column_major']);expected[12]+=delta[0];expected[13]+=delta[1]
+                matches=matches and len(matrix)==16 and all(abs(v-e)<1e-4 for v,e in zip(matrix,expected))
+            op_keys=('id','type','geometry_uuids','tools','depth','tab_settings','relief_settings','chamfer_settings','contour_position')
+            untouched=(after.get('stock')==before['stock'] and after.get('models_3d')==before['models_3d']
+                       and [{k:o.get(k) for k in op_keys} for o in after.get('operations',[])]==[{k:o.get(k) for k in op_keys} for o in before['operations']])
+            return {'verified':bool(native.get('invoked') and saved.get('saved') and matches and untouched),
+                    'native_result':native,'project':after,'center_mm':center_mm,'delta_mm':dict(zip('xy',delta)),
+                    'all_svg_shapes_translated':matches,'unrelated_inputs_unchanged':untouched,'recalculation_required':True,
+                    'placement_frame':'nominal stock frame; not machine coordinates',
+                    'simulation_verified':False,'nc_verified':False,'machining_ready':False,'machine_commands_sent':False}
+
     def place_model(self, model_uuid: str, center_mm: dict, project_sha256: str, world_rotation_deg: dict | None = None) -> dict:
         """Place one single-mesh model in the serialized stock frame, with saved evidence."""
         with self.lock:
@@ -181,7 +247,7 @@ class NativeStudio:
             untouched = (after.get('svg_geometry')==current['svg_geometry'] and after.get('stock')==current['stock']
                          and len(after.get('models_3d',[]))==1 and len(updated.get('meshes',[]))==1
                          and placed.get('dimensions_mm')==mesh['dimensions_mm'] and placed.get('vertex_count')==mesh['vertex_count'])
-            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings','relief_settings','chamfer_settings')
+            op_keys = ('id','type','geometry_uuids','tools','depth','tab_settings','relief_settings','chamfer_settings','contour_position')
             untouched = untouched and [{k:o.get(k) for k in op_keys} for o in after.get('operations',[])]==[{k:o.get(k) for k in op_keys} for o in current['operations']]
             return {'verified':bool(native.get('invoked') and saved.get('saved') and pose_matches and untouched),
                     'native_result':native,'model':updated,'unrelated_inputs_unchanged':untouched,
@@ -317,7 +383,7 @@ class NativeStudio:
         if self.managed_project is None:
             raise RuntimeError('Open an isolated project with this MCP before editing CAM')
         state = self.read()
-        if not state.get('available') or self.managed_project.stem not in state['window_title']:
+        if not state.get('available') or state.get('window_title') != f'MakeraStudio-[{self.managed_project.stem}]':
             raise RuntimeError('Studio changed projects; refusing CAM mutation')
 
     def operations(self) -> dict:
@@ -555,8 +621,75 @@ class NativeStudio:
     def create_contour(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
         return self._create_2d(geometry_uuids, end_depth_mm, 'contour')
 
+    def set_contour_position(self, operation_index: int, position: str) -> dict:
+        """Commit the native tool-center offset mode, without calculating."""
+        with self.lock:
+            self._require_managed()
+            if position not in ('outside','inside','on_line'):
+                raise ValueError('Position must be outside, inside or on_line')
+            if self.pending_tabs or self.pending_chamfer or self.pending_tools:
+                raise RuntimeError('Commit pending CAM edits before changing contour position')
+            before=inspect_project(str(self.managed_project))
+            if type(operation_index) is not int or not 0<=operation_index<len(before['operations']) or before['operations'][operation_index]['type']!=1:
+                raise ValueError('Expected a saved 2D contour operation')
+            live=self._call('path_summary')
+            if live['modal_type'] or len(live['paths'])!=len(before['operations']):
+                raise RuntimeError('Dialog or unsaved operation count prevents contour position editing')
+            baseline=self.save_project()
+            if not baseline.get('saved') or baseline['project']['operations']!=before['operations']:
+                raise RuntimeError('Unsaved operation changes saved; inspect before retrying')
+            if not self._call('show_path_list')['visible']:
+                raise RuntimeError('Native path list unavailable')
+            native=self._call('configure_contour_position',operation_index,position)
+            saved=self.save_project();after=saved.get('project',{})
+            operations=after.get('operations',[])
+            other_keys=('stock','svg_geometry','models_3d')
+            unchanged=all(after.get(k)==before.get(k) for k in other_keys) and len(operations)==len(before['operations'])
+            for i,(old,new) in enumerate(zip(before['operations'],operations)):
+                keys=('id','type','geometry_uuids','depth','tools','tab_settings') if i==operation_index else tuple(old)
+                unchanged=unchanged and all(old.get(k)==new.get(k) for k in keys)
+            op=operations[operation_index] if len(operations)>operation_index else {}
+            return {'verified':bool(native.get('invoked') and saved.get('saved') and unchanged and op.get('contour_position')==native.get('expected_saved_index')),
+                    'operation':op,'position':position,'native_result':native,'unrelated_inputs_unchanged':unchanged,
+                    'recalculation_required':True,'machining_ready':False,'machine_commands_sent':False}
+
     def create_drilling(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
         return self._create_2d(geometry_uuids, end_depth_mm, 'drilling')
+
+    def set_operation_geometry(self, operation_index: int, geometry_uuids: list[str]) -> dict:
+        """Rebind a saved planar operation through the native geometry selector."""
+        with self.lock:
+            self._require_managed()
+            if self.pending_tools or self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit pending CAM settings before geometry rebinding')
+            before=inspect_project(str(self.managed_project))
+            if (type(operation_index) is not int or not 0<=operation_index<len(before['operations'])
+                    or before['operations'][operation_index]['type'] not in (0,1,2)):
+                raise ValueError('Expected a saved planar operation')
+            known={s['uuid'] for s in before['svg_geometry']}
+            if (not isinstance(geometry_uuids,list) or not geometry_uuids or len(geometry_uuids)>50
+                    or any(not isinstance(uid,str) or uid not in known for uid in geometry_uuids)
+                    or len(set(geometry_uuids))!=len(geometry_uuids)):
+                raise ValueError('Expected distinct saved SVG UUIDs')
+            live=self._call('path_summary')
+            if live['modal_type'] or len(live['paths'])!=len(before['operations']):
+                raise RuntimeError('Dialog or unsaved operation count prevents rebinding')
+            baseline=self.save_project()
+            if not baseline.get('saved') or baseline['project']['operations']!=before['operations']:
+                raise RuntimeError('Unsaved changes saved; inspect before retrying')
+            if not self._call('show_path_list')['visible']:
+                raise RuntimeError('Native path list unavailable')
+            old=before['operations'][operation_index]
+            native=self._call('configure_contour',operation_index,geometry_uuids,old['depth']['endDepth'],{0:'pocket',1:'contour',2:'drilling'}[old['type']])
+            saved=self.save_project();after=saved.get('project',{});ops=after.get('operations',[])
+            unchanged=all(after.get(k)==before.get(k) for k in ('stock','svg_geometry','models_3d')) and len(ops)==len(before['operations'])
+            for i,(prev,current) in enumerate(zip(before['operations'],ops)):
+                keys=('id','type','depth','tools','tab_settings','contour_position') if i==operation_index else tuple(prev)
+                unchanged=unchanged and all(prev.get(k)==current.get(k) for k in keys)
+            op=ops[operation_index] if len(ops)>operation_index else {}
+            return {'verified':bool(native.get('invoked') and all(native['invoked']) and saved.get('saved') and unchanged and op.get('geometry_uuids')==geometry_uuids),
+                    'operation':op,'unrelated_inputs_unchanged':unchanged,'recalculation_required':True,
+                    'machining_ready':False,'machine_commands_sent':False}
 
     def create_pocket(self, geometry_uuids: list[str], end_depth_mm: float) -> dict:
         return self._create_2d(geometry_uuids, end_depth_mm, 'pocket')
@@ -752,6 +885,8 @@ class NativeStudio:
             live = self._call('path_summary')
             if live['modal_type']:
                 raise RuntimeError('Resolve current Studio dialog before creating an operation')
+            if not self._call('show_path_list')['visible']:
+                raise RuntimeError('Model preparation has not reached the native path list')
             baseline_count = len(live['paths'])
             if not self._call('open_path_chooser')['queued']:
                 raise RuntimeError('Studio rejected opening the path chooser')
@@ -977,15 +1112,83 @@ class NativeStudio:
             return {'verified': False, 'outcome': 'new_calculation_not_verified_before_timeout',
                     'modal_type': live.get('modal_type'), 'last_saved_operation': last}
 
+    def create_project(self, path: str) -> dict:
+        """Create an empty native three-axis MKS at a new cases destination."""
+        with self.lock:
+            project = Path(path).resolve()
+            allowed = (self.settings.root / 'cases').resolve()
+            if not project.is_relative_to(allowed) or project.suffix.lower() != '.mks':
+                raise ValueError('New MKS destination must be under cases/')
+            if project.exists() or not project.parent.is_dir():
+                raise ValueError('Destination must not exist and its parent must exist')
+            live = self._call('path_summary')
+            if live['modal_type']:
+                return {'created':False,'outcome':'existing_dialog_blocks_new_project','modal_type':live['modal_type']}
+            state = self.read()
+            if not state.get('available'):
+                raise RuntimeError('Studio is not available')
+            if self.managed_project is None:
+                raise RuntimeError('Open a managed project before replacing the current project')
+            self._require_managed()
+            if self.pending_tools or self.pending_tabs or self.pending_chamfer:
+                raise RuntimeError('Commit pending operation edits before creating a project')
+            if not self.save_project().get('saved'):
+                raise RuntimeError('Cannot preserve current managed project')
+            if not self._call('new_project',state['window_title']).get('queued'):
+                raise RuntimeError('New-project action rejected')
+            self.managed_project = None
+            self._wait_modal('ModeSelectorWidget')
+            if not self._call('choose_new_project_mode').get('queued'):
+                raise RuntimeError('Custom three-axis mode rejected')
+            self._wait_modal(None)
+            state = self.read()
+            if state.get('window_title') != 'MakeraStudio-[未定义]' or self._call('path_summary')['paths']:
+                raise RuntimeError('New empty project state not verified')
+            if project.exists():
+                raise RuntimeError('Destination appeared during project creation; refusing overwrite')
+            if not self._call('save_new_project',state['window_title']).get('queued'):
+                raise RuntimeError('Initial save action rejected')
+            self._wait_modal('QFileDialog')
+            if project.exists():
+                raise RuntimeError('Destination appeared before initial save; resolve save dialog without overwriting')
+            if not self._call('select_new_project_file',str(project)).get('queued'):
+                raise RuntimeError('Initial save destination rejected')
+            self._wait_modal(None)
+            self._call('barrier')
+            deadline=time.monotonic()+8
+            while time.monotonic()<deadline:
+                if project.exists():
+                    try:
+                        snapshot=inspect_project(str(project))
+                    except (OSError,ValueError,KeyError,zipfile.BadZipFile):
+                        time.sleep(.1)
+                        continue
+                    state=self.read()
+                    if (state.get('window_title') == f'MakeraStudio-[{project.stem}]'
+                            and not snapshot['svg_geometry'] and not snapshot['models_3d']
+                            and not snapshot['operations'] and not self._call('path_summary')['paths']):
+                        self.managed_project=project
+                        return {'created':True,'saved_verified':True,'empty_geometry_and_operations_verified':True,
+                                'path':str(project),'project':snapshot,'native_mode':'custom_3_axis',
+                                'stock_defaults_require_configuration':True,'machining_ready':False,'machine_commands_sent':False}
+                    raise RuntimeError('Saved project is not the expected empty native project')
+                time.sleep(.1)
+            return {'created':False,'outcome':'initial_save_not_verified','path':str(project)}
+
     def open_project(self, path: str) -> dict:
         project = Path(path).resolve(strict=True)
         allowed = (self.settings.root / "cases").resolve()
         if not project.is_relative_to(allowed):
             raise ValueError("This development adapter only opens isolated project copies under cases/")
         inspection = inspect_project(str(project))
+        modal = self._call('path_summary')['modal_type']
+        if modal:
+            return {'opened':False, 'outcome':'existing_dialog_blocks_project_switch',
+                    'modal_type':modal, 'open_queued':False}
         queued = self._call("open_project", str(project))
         if not queued["queued"]:
             raise RuntimeError("Native sltOpenProject invocation rejected")
+        self.managed_project = None
         self._call("barrier")
         # A queued call is not success. Verify the resulting native project title.
         expected = project.stem
@@ -994,7 +1197,8 @@ class NativeStudio:
         same_project_saved = False
         while time.monotonic() < deadline:
             state = self.read()
-            modal = self._call('path_summary')['modal_type']
+            live = self._call('path_summary')
+            modal = live['modal_type']
             if modal:
                 if modal == 'MyMessageBox' and state.get('window_title') == f'MakeraStudio-[{expected}]' and not same_project_saved:
                     try:
@@ -1005,7 +1209,8 @@ class NativeStudio:
                         time.sleep(.2)
                         continue
                 return {'opened': False, 'outcome': 'native_open_waiting_for_dialog', 'modal_type': modal, 'state': state}
-            if state.get("available") and expected in state["window_title"]:
+            if (state.get("available") and state['window_title'] == f'MakeraStudio-[{expected}]'
+                    and len(live['paths']) == inspection['native_path_entries']):
                 self.managed_project = project
                 self.pending_tools = {}
                 self.pending_tabs = {}
@@ -1022,7 +1227,7 @@ class NativeStudio:
         if self.managed_project is None:
             raise RuntimeError("Open an isolated project with this MCP before modifying stock")
         state = self.read()
-        if not state.get("available") or self.managed_project.stem not in state["window_title"]:
+        if not state.get("available") or state.get('window_title') != f'MakeraStudio-[{self.managed_project.stem}]':
             raise RuntimeError("Studio changed projects; refusing to modify stock")
         if not dimensions or set(dimensions) - {"x", "y", "z"}:
             raise ValueError("Expected one or more stock dimensions x/y/z")
@@ -1053,7 +1258,7 @@ class NativeStudio:
         if self.managed_project is None:
             raise RuntimeError("No managed isolated project is open")
         state = self.read()
-        if not state.get("available") or self.managed_project.stem not in state["window_title"]:
+        if not state.get("available") or state.get('window_title') != f'MakeraStudio-[{self.managed_project.stem}]':
             raise RuntimeError("Studio changed projects; refusing to save")
         before = self.managed_project.stat().st_mtime_ns
         queued = self._call("save_project")

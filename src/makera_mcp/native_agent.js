@@ -65,12 +65,21 @@ const postMessage=new NativeFunction(user32.getExportByName('PostMessageW'),'boo
 const guiJobs=[];
 let inGuiJob=false;
 let managedFileDialogThread=0;
+let managedSaveDialogThread=0;
 // Use Qt's own file picker for this one managed import, leaving other dialogs unchanged.
 const filePickerHook=Interceptor.attach(exp(widgets,'?getOpenFileNames@QFileDialog@@'),{
   onEnter(args){
     if(managedFileDialogThread===this.threadId){
       args[6]=ptr(args[6].toUInt32()|0x10); // QFileDialog::DontUseNativeDialog
       managedFileDialogThread=0;
+    }
+  }
+});
+const savePickerHook=Interceptor.attach(exp(widgets,'?getSaveFileName@QFileDialog@@'),{
+  onEnter(args){
+    if(managedSaveDialogThread===this.threadId){
+      args[6]=ptr(args[6].toUInt32()|0x10);
+      managedSaveDialogThread=0;
     }
   }
 });
@@ -258,6 +267,33 @@ rpc.exports = {
     if(added.length!==1)throw new Error('Cannot identify newly created group; inspect before retrying');
     treeSetCurrent(tree,added[0].item);
     return {...renameEmptyToolGroup(modal,name),created:true};
+  });},
+  placeSvgLayout(hwnd,layerIds,center){return onGui(hwnd,()=>{
+    if(!activeModal().isNull()||!Array.isArray(layerIds)||!layerIds.length||layerIds.length>50||layerIds.some(v=>!Number.isInteger(v)||v<0)||!Array.isArray(center)||center.length!==2||!center.every(Number.isFinite))throw new Error('Invalid SVG layout placement');
+    const objects=treeOf(rootOf(hwnd)),areas=objects.filter(o=>o.name==='widgetDesign'&&o.type==='CutterPathDesignArea'),dialogs=objects.filter(o=>o.type==='MoveDlg');
+    if(areas.length!==1||dialogs.length!==1)throw new Error('Native SVG move editor unavailable');
+    const area=ptr(areas[0].pointer),dialog=ptr(dialogs[0].pointer),fields=treeOf(dialog),targets=[];
+    for(const [i,axis] of ['X','Y'].entries()){
+      const spins=fields.filter(o=>o.name==='doubleSpinBox'&&o.path.includes('/lineEdt_Move_'+axis+'/'));
+      const wrappers=fields.filter(o=>o.name==='lineEdt_Move_'+axis&&o.type==='UnitDoubleSpinBox');
+      if(spins.length!==1||wrappers.length!==1)throw new Error('Expected SVG XY editor fields');
+      const spin=ptr(spins[0].pointer),scale=10**spinDecimals(spin),value=center[i];
+      if(value<spinMin(spin)||value>spinMax(spin)||Math.abs(value*scale-Math.round(value*scale))>1e-6)throw new Error('SVG position outside native precision/range');
+      targets.push({spin,wrapper:ptr(wrappers[0].pointer)});
+    }
+    if(!queueMethod(area,'sltSelectLayerOrModel',[{type:'QList<int>',value:layerIds},{type:'bool',value:false}],1))throw new Error('Native SVG layer selection failed');
+    const buttons=objects.filter(o=>o.name==='MenuBtn_Move'&&isA(ptr(o.pointer),'QToolButton'));
+    if(buttons.length!==1||!enabled(ptr(buttons[0].pointer)))throw new Error('SVG Move tool unavailable');
+    if(!visible(dialog)&&!queueMethod(ptr(buttons[0].pointer),'click',[],1))throw new Error('Cannot enter SVG Move mode');
+    if(!visible(dialog))throw new Error('SVG Move editor not visible');
+    const anchors=fields.filter(o=>o.name==='radioButton_center'&&isA(ptr(o.pointer),'QRadioButton'));
+    if(anchors.length!==1||!queueMethod(ptr(anchors[0].pointer),'click',[],1)||!buttonChecked(ptr(anchors[0].pointer)))throw new Error('SVG center anchor not checked');
+    const invoked=targets.map((t,i)=>queueMethod(t.spin,'setValue',[{type:'double',value:center[i]}],1));
+    for(const t of targets)invoked.push(queueMethod(t.wrapper,'editingFinished',[],1));
+    invoked.push(queueMethod(dialog,'sltPosChanged',[],1));
+    const actual=targets.map(t=>spinValue(t.spin));
+    invoked.push(queueMethod(dialog,'sltCloseWindow',[],1));
+    return {invoked:invoked.every(Boolean),editor_center_mm:actual,layer_ids:layerIds};
   });},
   placeSingleModel(hwnd,modelId,center,rotation){return onGui(hwnd,()=>{
     if(!activeModal().isNull()||!Number.isInteger(modelId)||modelId<0||![center,rotation].every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite))||rotation.filter(v=>v!==0).length>1)throw new Error('Invalid model placement');
@@ -480,8 +516,9 @@ rpc.exports = {
     const objects=treeOf(modal),find=name=>{const matches=objects.filter(o=>o.name===name);if(matches.length!==1)throw new Error('Expected tool field '+name);return ptr(matches[0].pointer);};
     const list=find('listWidget');if(!isA(list,'QListWidget'))throw new Error('Expected material list');
     let rows=[];for(let i=0;i<listCount(list);i++)if(getText(listItem(list,i),listItemText)===material)rows.push(i);
-    if(!rows.length&&material==='铜'){
-      const groups=[];for(let i=0;i<listCount(list);i++)if(getText(listItem(list,i),listItemText)==='铜合金')groups.push(i);
+    const materialParent={'铜':'铜合金','6061铝合金':'铝合金','7075铝合金':'铝合金'}[material];
+    if(!rows.length&&materialParent){
+      const groups=[];for(let i=0;i<listCount(list);i++)if(getText(listItem(list,i),listItemText)===materialParent)groups.push(i);
       if(groups.length===1)queueMethod(list,'onItemClicked',[{type:'QListWidgetItem*',value:listItem(list,groups[0])}],1);
       for(let i=0;i<listCount(list);i++)if(getText(listItem(list,i),listItemText)===material)rows.push(i);
     }
@@ -638,6 +675,20 @@ rpc.exports = {
       queueMethod(path,'on_dspbEndDepth_editingFinished',[],1)];
     return {invoked:results,geometry_uuids:uuids,end_depth_mm:endDepth};
   });},
+  configureContourPosition(hwnd,index,position){return onGui(hwnd,()=>{
+    const labels={outside:'线外侧',inside:'线内侧',on_line:'轮廓上'};
+    if(!Object.prototype.hasOwnProperty.call(labels,position)||!Number.isInteger(index)||index<0||!activeModal().isNull())throw new Error('Invalid contour position or active dialog');
+    const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
+    if(index>=paths.length)throw new Error('Contour index unavailable');
+    const path=ptr(paths[index].pointer),objects=treeOf(path);
+    const matches=objects.filter(o=>o.name==='contour2DPosition'&&isA(ptr(o.pointer),'QComboBox')&&visible(ptr(o.pointer)));
+    if(matches.length!==1)throw new Error('Expected visible contour position selector');
+    const box=ptr(matches[0].pointer),rows=[];
+    for(let i=0;i<comboCount(box);i++){const text=Memory.alloc(8);comboItemText(box,text,i);try{if(readQString(text)===labels[position])rows.push(i);}finally{destroyQString(text);}}
+    if(rows.length!==1)throw new Error('Exact contour position unavailable');
+    const invoked=[queueMethod(box,'setCurrentIndex',[{type:'int',value:rows[0]}],1),queueMethod(path,'on_contour2DPosition_currentIndexChanged',[{type:'int',value:rows[0]}],1)];
+    return {invoked:invoked.every(Boolean),position,expected_saved_index:rows[0],editor_label:getText(box,comboText)};
+  });},
   configureRelief(hwnd,index,uuid,layered,allowance){return onGui(hwnd,()=>{
     if(!Number.isInteger(index)||index<0||typeof uuid!=='string'||!/^[A-Za-z0-9-]{36}$/.test(uuid)||typeof layered!=='boolean'||!Number.isFinite(allowance)||allowance<0||allowance>2||!activeModal().isNull())throw new Error('Invalid 3D relief settings');
     const paths=treeOf(rootOf(hwnd)).filter(o=>o.type==='KnifePathDragWdg');
@@ -757,6 +808,44 @@ rpc.exports = {
     const root=rootOf(hwnd);
     return {queued:queueMethod(root,'sltOpenProject',[{type:'QString',value:path}]),method:'MainWindow.sltOpenProject(QString)'};
   },
+  newProject(hwnd,expectedTitle){return onGui(hwnd,()=>{
+    const root=rootOf(hwnd);
+    if(!activeModal().isNull())throw new Error('Resolve current dialog before creating a project');
+    if(typeof expectedTitle!=='string'||getText(root,titleText)!==expectedTitle)throw new Error('Active project changed before new project');
+    return {queued:queueMethod(root,'on_actionNew_triggered'),method:'MainWindow.on_actionNew_triggered()'};
+  });},
+  chooseNewProjectMode(hwnd){return onGui(hwnd,()=>{
+    const modal=activeModal();
+    if(modal.isNull()||classOf(modal)!=='ModeSelectorWidget')throw new Error('Expected new-project mode selector');
+    const objects=treeOf(modal);
+    const labels=objects.filter(o=>o.path.includes('/wgt3AxisCustom/')&&isA(ptr(o.pointer),'QLabel')&&getText(ptr(o.pointer),labelText)==='自定义3轴加工');
+    const buttons=objects.filter(o=>o.path.includes('/wgt3AxisCustom/')&&isA(ptr(o.pointer),'QAbstractButton')&&visible(ptr(o.pointer))&&enabled(ptr(o.pointer)));
+    if(labels.length!==1||buttons.length!==1)throw new Error('Expected one custom three-axis project action');
+    return {queued:queueMethod(ptr(buttons[0].pointer),'click'),mode:'custom_3_axis'};
+  });},
+  saveNewProject(hwnd,expectedTitle){return onGui(hwnd,()=>{
+    const root=rootOf(hwnd);
+    if(!activeModal().isNull()||getText(root,titleText)!==expectedTitle)throw new Error('New project changed or dialog is active');
+    managedSaveDialogThread=getWindowThread(ptr(hwnd),NULL);
+    return {queued:queueMethod(root,'on_actionSaveAs_triggered'),method:'MainWindow.on_actionSaveAs_triggered()'};
+  });},
+  selectNewProjectFile(hwnd,path){return onGui(hwnd,()=>{
+    const modal=activeModal();
+    if(modal.isNull()||classOf(modal)!=='QFileDialog')throw new Error('Expected new project save dialog');
+    if(typeof path!=='string'||!path.toLowerCase().endsWith('.mks'))throw new Error('Expected MKS destination');
+    const fields=treeOf(modal).filter(o=>o.name==='fileNameEdit'&&isA(ptr(o.pointer),'QLineEdit'));
+    if(fields.length!==1)throw new Error('Unexpected save file-name field');
+    if(!queueMethod(ptr(fields[0].pointer),'setText',[{type:'QString',value:path}],1))throw new Error('Save file-name setter failed');
+    const list=Memory.alloc(8);fileDialogSelected(modal,list);let selected=[];
+    try{
+      const data=list.readPointer(),begin=data.add(8).readS32(),end=data.add(12).readS32();
+      if(begin<0||end-begin!==1)throw new Error('Expected one save destination');
+      selected.push(readQString(data.add(16+begin*8)));
+    }finally{metaDestruct(11,list);}
+    const normalized=s=>s.replace(/\\/g,'/').toLowerCase();
+    if(normalized(selected[0])!==normalized(path))throw new Error('Save destination differs from request');
+    return {selected,queued:queueMethod(modal,'accept',[],2)};
+  });},
   saveProject(hwnd){return onGui(hwnd,()=>{
     const root=rootOf(hwnd),buttons=treeOf(root).filter(o=>o.name==='btnSave'&&isA(ptr(o.pointer),'QPushButton'));
     if(buttons.length!==1||!enabled(ptr(buttons[0].pointer)))throw new Error('Studio save action unavailable');

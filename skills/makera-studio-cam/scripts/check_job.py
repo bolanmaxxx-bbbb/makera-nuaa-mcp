@@ -367,11 +367,29 @@ def validate_job(job, stage="plan", capabilities=None, evidence=None):
                 if record.get(field) is not True:
                     issue("operation_evidence", "evidence." + str(op.get("id")) + "." + field, "需要实际生成及保存回读证据", "evidence")
         if scope == "production_cam":
+            for op in operations:
+                if op.get('execution_mode') == 'manual' or op.get('kind') == 'drill':
+                    continue
+                review = records.get(op.get('id'), {}).get('efficiency_review', {})
+                if (not isinstance(review,dict) or review.get('reviewed') is not True
+                        or review.get('direction_strategy') not in ('one_way','reciprocal','closed_loop','other')
+                        or not review.get('basis')):
+                    issue('efficiency_unreviewed','evidence.'+str(op.get('id'))+'.efficiency_review',
+                          '核对去程/返程、逐层进刀、重复覆盖和空走；记录方向策略及依据，不强制双向切削','evidence')
             if evidence.get("simulation_verified") is not True or "simulation_result_verification" not in set((capabilities or {}).get("supported", [])):
                 issue("simulation_unverified", "evidence.simulation_verified", "正式CAM交付还缺受支持的实际仿真验证", "evidence")
         if job.get("deliverables", {}).get("nc") is True:
             if evidence.get("nc_verified") is not True or "nc_postprocess_and_verification" not in set((capabilities or {}).get("supported", [])):
                 issue("nc_unverified", "evidence.nc_verified", "所需NC交付未得到后处理与校验证据", "evidence")
+            inspection = evidence.get('nc_inspection') or {}
+            nc_path = inspection.get('path')
+            current_nc = False
+            if isinstance(nc_path,str) and Path(nc_path).is_file():
+                current_nc = hashlib.sha256(Path(nc_path).read_bytes()).hexdigest() == inspection.get('sha256')
+            sequence = inspection.get('sequence_audit') or {}
+            if not current_nc or sequence.get('restricted_sequence_check_passed') is not True:
+                issue('nc_shutdown_unverified','evidence.nc_inspection',
+                      '检查最终同哈希NC中最后切削后的明确停主轴、所用冷却关闭和结束标记；存在未解析控制流时不得判通过','evidence')
     if stage == "machine":
         issue("machine_unsupported", "stage", "本技能及当前服务不实现现场运动审批或执行", "capability")
     combined = missing + blocking

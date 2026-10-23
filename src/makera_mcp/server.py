@@ -17,6 +17,7 @@ from . import __version__
 from .config import Settings
 from .evidence import EvidenceStore
 from .nc import inspect_nc
+from .motion_audit import audit_saved_toolpath as inspect_saved_motion
 from .native import NativeStudio
 from .tasks import TaskStore
 from .project import inspect_project
@@ -77,10 +78,12 @@ def build_server(settings: Settings | None = None):
         return {"version": __version__, "primary_objective": "complete_studio_cam_tasks", "backend": "native_qt_via_frida",
                 "requires_computer_use": False, "camera_configured": bool(settings.camera_url),
                 "camera_protocol": "WebSocket /ws_video + start_stream -> binary JPEG (verified locally)",
-                "supported": ["native_studio_connection", "native_project_open", "native_stock_dimensions_and_commit",
+                "supported": ["native_studio_connection", "native_project_open", "native_empty_3_axis_project_creation", "native_stock_dimensions_and_commit",
                               "native_project_save_and_file_reinspection", "native_cam_method_discovery",
                               "svg_geometry_uuid_and_vertex_bounds_inspection", "native_2d_contour_creation_geometry_selection_depth",
                               "native_2d_contour_calculation_and_saved_vertex_verification",
+                              "native_2d_contour_position_saved_verification",
+                              "native_planar_operation_geometry_rebinding",
                               "native_tool_geometry_and_material_parameter_registration", "native_editor_tool_selection_and_generation_commit",
                               "native_tool_inventory_geometry_without_cutting_profiles",
                               "native_2d_drilling_and_verified_peck_retraction_sequence",
@@ -89,19 +92,24 @@ def build_server(settings: Settings | None = None):
                               "native_model_import_stl_svg_with_saved_geometry", "native_stock_catalog_readback",
                               "native_stock_shape_material_dimensions_saved",
                               "native_single_model_placement_saved_matrix_verification",
+                              "native_svg_layout_xy_translation_saved_verification",
                               "native_operation_catalog_classification", "native_3d_relief_calculation_and_verification",
                               "native_2d_chamfer_calculation_and_verification",
                               "current_qt_property_state", "camera_status", "fresh_jpeg", "frame_sequences", "local_evidence_export",
-                              "task_context", "lexical_nc_inspection", "persistent_cam_task_planning",
+                              "task_context", "lexical_nc_inspection", "nc_ordered_shutdown_and_modal_feed_diagnostics",
+                              "saved_motion_reciprocation_audit", "persistent_cam_task_planning",
                               "input_validation", "revision_invalidates_downstream_results"],
-                "not_implemented": ["other_model_import_formats", "multi_model_and_general_transform_commit", "native_project_creation_save_as",
+                "not_implemented": ["other_model_import_formats", "multi_model_and_general_transform_commit", "existing_project_save_as",
                                     "general_tool_group_management", "other_tool_geometry_fields", "operation_reorder_copy_delete",
                                     "full_facing_to_thickness_workflow", "fixture_clearance_verification",
                                     "task_stage_completion_commit", "2d_thread_calculation",
                                     "3d_feature_contour_hole_edge_selection_and_calculation", "rotary_and_laser_calculation",
                                     "simulation_result_verification", "nc_postprocessing_verification",
+                                    "reciprocal_stepdown_generation", "automatic_nc_shutdown_rewrite", "physical_job_completion_verification",
                                     "direct_controller_telemetry", "machine_motion", "automatic_anomaly_classification"],
                 "operation_catalog_tool": "get_studio_operation_catalog",
+                "development_only": {"native_planar_operation_geometry_rebinding":
+                    "guarded implementation; live save/reopen/trajectory validation still required"},
                 "native_tool_inventory_scope": {"kinds":["flat_endmill","drill"],"requires_known_three_dimensions":True,
                     "requires_existing_operation_entry":True,"active_cutting_profiles":False,
                     "explicit_new_group_flag":True,"existing_named_tool_overwrite":False},
@@ -127,6 +135,21 @@ def build_server(settings: Settings | None = None):
         return await anyio.to_thread.run_sync(studio.open_project, path)
 
     @server.tool(annotations=local_write)
+    async def create_studio_project(path: str) -> dict:
+        """Preserve the managed project, create an empty custom three-axis project and verify its initial save. New .mks path under cases/ only; no overwrite. Stock defaults still require configuration. Stops on unknown dialogs; no machine action."""
+        return await anyio.to_thread.run_sync(studio.create_project, path)
+
+    @server.tool(annotations=local_write)
+    async def set_studio_contour_position(operation_index: int, position: str) -> dict:
+        """Set/save 2D contour outside, inside or on_line mode. Verify native selector and saved contourPosition, preserving geometry, depth and tools. Regeneration and actual centerline checks are required; no machining."""
+        return await anyio.to_thread.run_sync(studio.set_contour_position, operation_index, position)
+
+    @server.tool(annotations=local_write)
+    async def set_studio_operation_geometry(operation_index: int, geometry_uuids: list[str]) -> dict:
+        """Rebind an existing planar pocket/contour/drill to distinct saved SVG UUIDs, preserving depths, tools, position and unrelated inputs. Regenerate and verify motion after rebinding. No machine commands."""
+        return await anyio.to_thread.run_sync(studio.set_operation_geometry, operation_index, geometry_uuids)
+
+    @server.tool(annotations=local_write)
     async def set_stock_dimensions(dimensions_mm: dict) -> dict:
         """Set x/y/z through native Qt value setters and commit signals; verify native property readback. Does not move the machine."""
         return await anyio.to_thread.run_sync(studio.set_stock, dimensions_mm)
@@ -150,6 +173,11 @@ def build_server(settings: Settings | None = None):
     async def set_studio_model_placement(model_uuid: str, center_mm: dict, project_sha256: str, world_rotation_deg: dict | None = None) -> dict:
         """Place one verified single-mesh 3D model inside rectangular stock. center_mm requires x/y/z in the saved node/stock frame, not machine coordinates. Optional rotation is a relative single-world-axis delta in 90-degree increments, -180..180. Requires fresh inspect_studio_project SHA256; saves and checks matrix/center and unchanged SVG/CAM inputs. No scaling, multi-model placement or motion."""
         return await anyio.to_thread.run_sync(studio.place_model, model_uuid, center_mm, project_sha256, world_rotation_deg)
+
+    @server.tool(annotations=local_write)
+    async def set_studio_svg_layout_position(center_mm: dict, project_sha256: str) -> dict:
+        """Move all planar SVG layers together in XY in one coordinate system, within rectangular stock. Fresh saved SHA required. Verify unchanged 3D model/tools/depths and moved saved SVG matrices; regenerate every affected path. No arbitrary transforms or machine motion."""
+        return await anyio.to_thread.run_sync(studio.place_svg_layout, center_mm, project_sha256)
 
     @server.tool(annotations=local_write)
     async def save_studio_project() -> dict:
@@ -335,8 +363,13 @@ def build_server(settings: Settings | None = None):
 
     @server.tool(annotations=readonly)
     async def inspect_nc_file(path: str) -> dict:
-        """Inspect NC text and literal word ranges; does not simulate, approve or transmit G-code."""
+        """Read NC literals, ordered standard shutdown and limited modal F diagnostics. Does not modify code, simulate, certify Z1 compatibility or transmit anything."""
         return await anyio.to_thread.run_sync(inspect_nc, path)
+
+    @server.tool(annotations=readonly)
+    async def audit_saved_toolpath(path: str, operation_index: int) -> dict:
+        """Read a saved MKS motion buffer for same-layer opposite passes and geometric overlap. Returns file hash and calculation flag. A review signal, not proven air-cutting, NC timing, stock simulation or machine stop verification."""
+        return await anyio.to_thread.run_sync(inspect_saved_motion, path, operation_index)
 
     atexit.register(camera.stop)
     atexit.register(studio.close)

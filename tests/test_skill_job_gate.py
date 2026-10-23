@@ -148,7 +148,8 @@ class JobGateTests(unittest.TestCase):
         self.assertIn("operation_evidence", self.codes(result))
         evidence["revision"] = 1
         evidence["operations"] = [{"id": op["id"], "calculated": True, "saved_verified": True,
-            "parameters_match": True, "motion_path_verified": True} for op in self.job["operations"]]
+            "parameters_match": True, "motion_path_verified": True,
+            "efficiency_review":{"reviewed":True,"direction_strategy":"one_way","basis":"synthetic independent review"}} for op in self.job["operations"]]
         self.assertTrue(validate_job(self.job, "delivery", self.caps, evidence)["ready_for_requested_stage"])
         self.assertIn("simulation_unverified", self.codes(validate_job(self.job, "delivery", {"supported": list(MODULE.CAPABILITIES.values())}, evidence)))
 
@@ -234,6 +235,7 @@ class JobGateTests(unittest.TestCase):
             "calculated": True, "saved_verified": True, "parameters_match": True, "motion_path_verified": True}]}
         self.assertIn("manual_step_unverified", self.codes(validate_job(self.job, "delivery", self.caps, evidence)))
         evidence["manual_steps"] = [{"id": "external", "verified": True, "evidence": "synthetic external report"}]
+        evidence['operations'][0]['efficiency_review']={'reviewed':True,'direction_strategy':'closed_loop','basis':'synthetic reviewed closed boundary'}
         self.assertTrue(validate_job(self.job, "delivery", self.caps, evidence)["ready_for_requested_stage"])
 
     def test_excluding_requirement_requires_real_user_choice(self):

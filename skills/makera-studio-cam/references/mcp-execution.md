@@ -6,14 +6,15 @@
 
 服务源项目为当前仓库。STDIO命令使用实际克隆目录下的`.venv/Scripts/python.exe -m makera_mcp.server`，以当前Codex MCP配置为准，不假定开发者的目录、设备地址或环境。
 
-完整目录验证版本0.8.3；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
+完整目录验证版本0.9.0；同时检查所需工具和能力字段。旧进程需重连，不能退回Computer Use。不要自动改动其他MCP服务器、登录信息或全局安全设置。
 
-版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整42工具路由保存在assets/mcp-tool-map.json。
+版本号不是所有只读动作的统一门槛；按当前工具与能力的交集降级使用，报告缺项。任务工具见task-and-payloads.md，观测/事件/NC见observation-and-nc.md；完整47工具路由保存在assets/mcp-tool-map.json。
 
 ## 已验证能力与边界
 
 | 动作 | 工具/能力 | 验收 |
 |---|---|---|
+| 原生新建空工程 | create_studio_project(path) | 当前已托管工程先保存，新目标必须不存在且位于cases；原生自定义3轴新建、首次保存、空几何与空工序回读；毛坯默认值仍须单独配置 |
 | 打开隔离MKS | open_studio_project | opened=true、无未处理提示、目标项目匹配 |
 | 设置名义毛坯 | set_stock_dimensions | 原生回读及保存文件一致；不冒充实测 |
 | 导入STL/SVG | import_studio_model | 新几何UUID、源哈希及保存后的顶点尺寸；不等于刀路、摆放或机床原点已验收 |
@@ -79,7 +80,7 @@
 
 ## 模型导入与毛坯（v0.6）
 
-1. 打开任务自己的隔离MKS；当前不能原生新建或另存工程。保存源MKS和导入文件的哈希，确认Studio无未处理提示。不得把历史案例复制成通用模板发布。
+1. 可用create_studio_project(path)原生新建空的自定义3轴工程，或打开任务自己的隔离MKS。新建前当前工程须已托管并能保存，目标文件不得存在；遇未知提示停止，不自动确认丢弃。现有工程另存仍未接通。保存源MKS和导入文件的哈希，确认Studio无未处理提示。不得把历史案例复制成通用模板发布。
 2. 导入使用`import_studio_model(path, units="mm", allow_duplicate=false)`，目前仅STL/SVG，文件非空且不大于64MiB。STL无内置单位，明确来源单位并先换算；SVG的mm、px、viewBox和嵌套变换也须按已知尺寸复核。导入不自动创建任何CAM工序。
 3. 检查`imported`和`saved_verified`，保存返回的新UUID。STL检查`new_models_3d[].meshes[].dimensions_mm`；SVG检查`new_svg_geometry[].bounds_in_serialized_coordinates_mm`并核对目标。它们是模型/节点局部几何，不能据此声明最终布局、父变换或机床坐标正确。
 4. 相同文件在本项目已有确认导入记录、且对应UUID仍存在时返回`outcome=already_present`，无需再次导入。明确要第二份时才用`allow_duplicate=true`。超时、未知提示、源文件变化或未验证结果不具有可靠去重证据；先读当前项目再决定，不能循环重试。
@@ -101,3 +102,7 @@
 该接口不启用任何材料参数。成功需verified、saved_and_reopened为true、active_material_profile_count=0，且cutting_parameters_set和operation_tool_selected为false。已存在同名刀具只有几何相符且无材料参数时才复用，否则停止，不覆盖别的工艺条目。精度不能表达的几何在保存前拒绝。录入后核对原工程选刀/刀路未变；批量录入前保留可恢复刀库备份。
 
 未知尺寸不填库默认值或其他刀具尺寸。信息不全的条目先保存本地待补清单（空值、来源、缺项、是否已写入Studio），照片、备份和实物信息不随公共代码发布。原生编辑器可能仍有默认肩长、伸出、尖端或刀号；这些不是物理确认值，接口unverified_fields须留作后续加工检查。只有另有材料和工艺依据、用户需要配置加工参数时，才使用register_studio_tool并按正式CAM重新验收。
+
+二维轮廓可用set_studio_contour_position(operation_index, position)配置outside/inside/on_line，分别对应线外侧/线内侧/轮廓上。该接口保存并核对contourPosition，不计算。直线开槽需显式选择on_line并由新生成运动顶点核对中心线、端点和切深；不能以默认线外侧代替。新工程创建二维工序前会先推进到原生刀路页，避免在隐藏编辑器里留下未配置默认工序。
+
+已有二维区域清理/轮廓/钻孔可用set_studio_operation_geometry(operation_index, geometry_uuids)重新绑定已保存SVG，核对切深、刀具、位置和无关工序未变，随后重新生成。分段底部切割可形成指定留料区，但应按刀具半径分析真实扫掠；它不等同于原生自动支撑的位置接口。两个端点的开放直线可能被Studio标记已计算却没有保存运动，必须以非空运动回读判定失败。

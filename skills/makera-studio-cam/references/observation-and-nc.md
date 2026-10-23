@@ -23,4 +23,4 @@ capture_frame/sample_frames/get_observation_bundle的文本结果里有observati
 
 用户提供本地.nc/.gcode/.tap时，调用inspect_nc_file(path)，保留其sha256、单位/距离模式命令、G/M代码及literal_word_ranges。服务只接受不超过32 MiB的本地文本，不生成、不后处理、不发送代码。
 
-literal_word_ranges是字面数值范围，不能当作实际行程包络；工具不重建模态偏置、圆弧、表达式、子程序或碰撞。machining_approved必须保持false。NC文本检查可以作为独立交付，但不能据此把技能evidence.nc_verified或simulation_verified设为true。若用户要求真正后处理/仿真，报告对应能力尚未实现。
+literal_word_ranges是字面数值范围，不能当作实际行程包络；工具不重建偏置、圆弧、表达式、子程序或碰撞。v0.9.0的sequence_audit额外检查受限标准指令顺序、末尾主轴/冷却关闭与F继承，仍不验证实际停机或Z1后处理兼容性。machining_approved必须保持false。NC文本检查不能据此把技能evidence.nc_verified或simulation_verified设为true。效率与收尾验收见[走刀效率与程序收尾](path-efficiency-and-shutdown.md)。若用户要求真正后处理/仿真，报告对应能力尚未实现。
