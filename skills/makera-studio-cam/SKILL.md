@@ -14,6 +14,7 @@ description: 使用 Makera/造物时代 Studio MCP 规划与执行CAM任务（�
 - 项目、毛坯、几何、刀具、区域清理/轮廓/钻孔、起止深度、计算保存、原生状态/方法诊断：读[MCP执行与验收](references/mcp-execution.md)。用户只要求按照片/清单入库时，使用其中的“仅录入刀具”流程，不为保存条目编造材料速率。
 - 导入STL/SVG、选择方形/圆棒毛坯或材料/规格时，使用同一参考中的v0.6流程。用户询问其他功能或扩展工作流时读[能力覆盖清单](references/capability-coverage.md)，不要把规划选项当作已接通能力。
 - 涉及三维模型的方向/高度、模型与二维工序对应关系，或连接筋实际留料时，读[几何摆放与留件验收](references/geometry-and-retention.md)。区分局部尺寸与保存变换后的尺寸；不以输入框、刀具名称或筋宽设定值代替实际几何证据。
+- 圆棒上的微型双面零件、替换/移位模型后预览形状不符时，读[圆棒双面微件修复案例](references/round-bar-micro-part.md)。重点排查隐藏旧模型参与计算、顶底面高度符号和旧刀路缓存；案例参数只供相同布局核对。
 - 创建/继续/修订持久任务、job字段映射和实际调用参数：读[任务与调用参数](references/task-and-payloads.md)。新任务使用create_cam_task，继续时get/list，参数改变用完整spec调用revise；不凭摄像头或计划自动推进阶段。
 - 用户需要观察或记录现场时：读[视频与NC辅助流程](references/observation-and-nc.md)，接通状态、订阅、单帧/连续采样、状态组合、上下文、事件和本地ZIP导出；无需视频时不要求地址或开启相机。
 - 用户提供NC文件：同一参考中的inspect_nc_file用于文本检查，不等于生成NC、仿真或发送加工。
